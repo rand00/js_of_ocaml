@@ -20,9 +20,18 @@
 module Lexer : sig
   type t
 
+  type error
+
   val of_file : string -> t
 
-  val of_lexbuf : Lexing.lexbuf -> t
+  val of_string :
+       ?report_error:(error -> unit)
+    -> ?pos:Lexing.position
+    -> ?filename:string
+    -> string
+    -> t
+
+  val print_error : error -> unit
 
   val of_channel : in_channel -> t
 end
@@ -31,6 +40,9 @@ exception Parsing_error of Parse_info.t
 
 val parse : Lexer.t -> Javascript.program
 
-val parse' : Lexer.t -> Javascript.program_with_annots * (Js_token.t * Parse_info.t) list
+val parse' :
+     Lexer.t
+  -> ((Js_token.Annot.t * Parse_info.t) list * Javascript.program) list
+     * (Js_token.t * Loc.t) list
 
 val parse_expr : Lexer.t -> Javascript.expression

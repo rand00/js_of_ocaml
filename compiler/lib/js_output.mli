@@ -19,4 +19,10 @@
  *)
 
 val program :
-  Pretty_print.t -> ?source_map:string option * Source_map.t -> Javascript.program -> unit
+     ?accept_unnamed_var:bool
+  -> ?source_map:bool
+  -> Pretty_print.t
+  -> Javascript.program
+  -> Source_map.info
+
+val blackbox_filename : string

@@ -17,11 +17,12 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
  *)
-module Make (N : sig
-  type t
-end)
-(NSet : Set.S with type elt = N.t)
-(NMap : Map.S with type key = N.t) : sig
+module Make
+    (N : sig
+      type t
+    end)
+    (NSet : Set.S with type elt = N.t)
+    (NMap : Map.S with type key = N.t) : sig
   type t =
     { domain : NSet.t
     ; fold_children : 'a. (N.t -> 'a -> 'a) -> N.t -> 'a -> 'a
@@ -72,11 +73,12 @@ module type Tbl = sig
   val make : size -> 'a -> 'a t
 end
 
-module Make_Imperative (N : sig
-  type t
-end)
-(NSet : ISet with type elt = N.t)
-(NTbl : Tbl with type key = N.t) : sig
+module Make_Imperative
+    (N : sig
+      type t
+    end)
+    (NSet : ISet with type elt = N.t)
+    (NTbl : Tbl with type key = N.t) : sig
   type t =
     { domain : NSet.t
     ; iter_children : (N.t -> unit) -> N.t -> unit
@@ -94,5 +96,47 @@ end)
 
   module Solver (D : DOMAIN) : sig
     val f : NTbl.size -> t -> (D.t NTbl.t -> N.t -> D.t) -> D.t NTbl.t
+
+    val f' :
+         NTbl.size
+      -> t
+      -> (update:(children:bool -> N.t -> unit) -> D.t NTbl.t -> N.t -> D.t)
+      -> D.t NTbl.t
   end
+end
+
+module type ACTION = sig
+  type t
+end
+
+module type DOMAIN = sig
+  type t
+
+  val equal : t -> t -> bool
+
+  val bot : t
+
+  val top : t
+
+  val join : t -> t -> t
+end
+
+module Solver
+    (N : sig
+      type t
+    end)
+    (NSet : ISet with type elt = N.t)
+    (NTbl : Tbl with type key = N.t)
+    (A : ACTION)
+    (D : DOMAIN) : sig
+  type t =
+    { domain : NSet.t
+    ; iter_children : (N.t -> A.t -> unit) -> N.t -> unit
+    }
+
+  val f :
+       state:D.t NTbl.t
+    -> t
+    -> (state:D.t NTbl.t -> dep:N.t -> target:N.t -> action:A.t -> D.t)
+    -> unit
 end

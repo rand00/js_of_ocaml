@@ -112,8 +112,12 @@ let%expect_test _ =
   let data =
     "\132\149\166\190\000\000\000\012\000\000\000\001\000\000\000\004\000\000\000\003\018_j\000\000\000\000\000\000\000\000\001"
   in
-  let v = Marshal.from_string data 0 in
-  let () = assert (1L = v) in
+  (if String.split_on_char '.' Sys.ocaml_version |> List.hd |> int_of_string >= 5
+   then ()
+   else
+     let v = Marshal.from_string data 0 in
+     let () = assert (1L = v) in
+     ());
   [%expect {||}]
 
 let%expect_test _ =
@@ -129,3 +133,38 @@ let%expect_test _ =
   Printf.printf "%S" (Marshal.to_string ba []);
   [%expect
     {| "\132\149\166\190\000\000\000'\000\000\000\001\000\000\000\007\000\000\000\007\024_bigarr02\000\000\000\000\020\000\000\000\000\000\000\000(\000\000\000\001\000\000\000\005\000\003\000\003\000\001\000\002" |}]
+
+let%expect_test "test sharing of string" =
+  let s = "AString" in
+  let p = s, s in
+  let obj = [ p; p ] in
+  Printf.printf "%S" (Marshal.to_string s []);
+  [%expect
+    {| "\132\149\166\190\000\000\000\b\000\000\000\001\000\000\000\003\000\000\000\002'AString" |}];
+  Printf.printf "%S" (Marshal.to_string obj []);
+  [%expect
+    {| "\132\149\166\190\000\000\000\016\000\000\000\004\000\000\000\012\000\000\000\011\160\160'AString\004\001\160\004\003@" |}]
+
+let%expect_test "test float" =
+  let s = 3.14 in
+  let p = s, s in
+  let obj = [ p; p ] in
+  let r1 = Marshal.to_string s [ No_sharing ] in
+  Printf.printf "%S\n" r1;
+  Printf.printf "%f" (Marshal.from_string r1 0);
+  [%expect
+    {|
+      "\132\149\166\190\000\000\000\t\000\000\000\000\000\000\000\003\000\000\000\002\012\031\133\235Q\184\030\t@"
+      3.140000 |}];
+  let r2 = Marshal.to_string obj [] in
+  Printf.printf "%S\n" r2;
+  let a, b, c, d =
+    match Marshal.from_string r2 0 with
+    | [ (a, b); (c, d) ] -> a, b, c, d
+    | _ -> assert false
+  in
+  Printf.printf "%f %f %f %f" a b c d;
+  [%expect
+    {|
+    "\132\149\166\190\000\000\000\017\000\000\000\004\000\000\000\012\000\000\000\011\160\160\012\031\133\235Q\184\030\t@\004\001\160\004\003@"
+    3.140000 3.140000 3.140000 3.140000 |}]

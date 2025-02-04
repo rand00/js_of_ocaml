@@ -20,7 +20,9 @@
 open! Stdlib
 open Javascript
 
-let debug = Debug.find "shortvar"
+let debug_shortvar = Debug.find "shortvar"
+
+let debug = Debug.find "js_assign"
 
 module S = Code.Var.Set
 module Var = Code.Var
@@ -30,7 +32,7 @@ module type Strategy = sig
 
   val create : int -> t
 
-  val record_block : t -> Js_traverse.t -> catch:bool -> Javascript.ident list -> unit
+  val record_block : t -> Js_traverse.t -> Js_traverse.block -> unit
 
   val allocate_variables : t -> count:int Javascript.IdentMap.t -> string array
 end
@@ -91,7 +93,7 @@ while compiling the OCaml toplevel:
     BitSet.set a.used i;
     if a.first_free = i then a.first_free <- BitSet.next_free a.used a.first_free
 
-  let is_available l i = List.for_all l ~f:(fun a -> BitSet.mem a.used i)
+  let is_available l i = List.for_all l ~f:(fun a -> not (BitSet.mem a.used i))
 
   let first_available l =
     let rec find_rec n l =
@@ -113,69 +115,6 @@ while compiling the OCaml toplevel:
   (* For debugging *)
 
   let create nv = { constr = Array.make nv []; parameters = [| [] |]; constraints = [] }
-
-  (* let output_debug_information t count =
-   *
-   *
-   *   let weight v = (IdentMap.find (V v) count) in
-   *
-   *   let usage =
-   *     List.fold_left
-   *       (fun u s ->
-   *          S.fold
-   *            (fun v u -> VM.add v (try 1 + VM.find v u with Not_found -> 1) u)
-   *            s u)
-   *       VM.empty t.constraints
-   *   in
-   *
-   *   let l = List.map fst (VM.bindings usage) in
-   *
-   *   let ch = open_out "/tmp/weights.txt" in
-   *   List.iter
-   *     (fun v ->
-   *        Printf.fprintf ch "%d / %d / %d\n" (weight v)
-   *          (VM.find v usage) (Var.idx v))
-   *     l;
-   *   close_out ch;
-   *
-   *   let ch = open_out "/tmp/problem.txt" in
-   *   Printf.fprintf ch "Maximize\n";
-   *   let a = Array.of_list l in
-   *   Printf.fprintf ch "  ";
-   *   for i = 0 to Array.length a - 1 do
-   *     let v = a.(i) in
-   *     let w = weight v in
-   *     if i > 0 then Printf.fprintf ch " + ";
-   *     Printf.fprintf ch "%d x%d" w (Var.idx v)
-   *   done;
-   *   Printf.fprintf ch "\n";
-   *   Printf.fprintf ch "Subject To\n";
-   *   List.iter
-   *     (fun s ->
-   *        if S.cardinal s > 0 then begin
-   *          Printf.fprintf ch "  ";
-   *          let a = Array.of_list (S.elements s) in
-   *          for i = 0 to Array.length a - 1 do
-   *            if i > 0 then Printf.fprintf ch " + ";
-   *            Printf.fprintf ch "x%d" (Var.idx a.(i))
-   *          done;
-   *          Printf.fprintf ch "<= 54\n"
-   *        end)
-   *     t.constraints;
-   *   Printf.fprintf ch "Binary\n  ";
-   *   List.iter (fun v -> Printf.fprintf ch " x%d" (Var.idx v)) l;
-   *   Printf.fprintf ch "\nEnd\n";
-   *   close_out ch;
-   *
-   *   let ch = open_out "/tmp/problem2" in
-   *   let var x = string_of_int (Var.idx x) in
-   *   let a = List.map (fun v -> (var v, weight v)) l in
-   *   let b =
-   *     List.map (fun s -> List.map var (S.elements s)) t.constraints in
-   *   let c = List.map var l in
-   *   output_value ch
-   *     ((a, b, c) : (string * int) list * string list list * string list);
-   *   close_out ch *)
 
   let allocate_variables t ~count =
     let weight v = try IdentMap.find (V (Var.of_idx v)) count with Not_found -> 0 in
@@ -200,7 +139,8 @@ while compiling the OCaml toplevel:
       n3 := !n3 + weight i
     in
     let nm ~origin n =
-      name.(origin) <- Var.to_string ~origin:(Var.of_idx origin) (Var.of_idx n)
+      let n = Var.to_string ~origin:(Var.of_idx origin) (Var.of_idx n) in
+      name.(origin) <- n
     in
     let total = ref 0 in
     let bad = ref 0 in
@@ -218,7 +158,7 @@ while compiling the OCaml toplevel:
             stats idx i)
           else incr bad)
     done;
-    if debug ()
+    if debug_shortvar ()
     then
       Format.eprintf
         "Function parameter properly assigned: %d/%d@."
@@ -235,13 +175,13 @@ while compiling the OCaml toplevel:
         stats idx n);
       if List.is_empty l then assert (weight idx.(i) = 0)
     done;
-    if debug ()
+    if debug_shortvar ()
     then (
       Format.eprintf "short variable count: %d/%d@." !n1 !n0;
       Format.eprintf "short variable occurrences: %d/%d@." !n2 !n3);
     name
 
-  let add_constraints global u ?(offset = 0) params =
+  let add_constraints global u ~offset (params : ident list) =
     let constr = global.constr in
     let c = make_alloc_table () in
     S.iter
@@ -269,10 +209,33 @@ while compiling the OCaml toplevel:
     done;
     global.constraints <- u :: global.constraints
 
-  let record_block state scope ~catch params =
-    let offset = if catch then 5 else 0 in
-    let all = S.union scope.Js_traverse.def scope.Js_traverse.use in
-    add_constraints state all ~offset params
+  let record_block state scope (block : Js_traverse.block) =
+    let all =
+      Javascript.IdentSet.union
+        (Javascript.IdentSet.union scope.Js_traverse.def_var scope.Js_traverse.def_local)
+        scope.Js_traverse.use
+    in
+    let all =
+      match block with
+      | Normal -> all
+      | Params _ -> all
+      | Catch (p, _) ->
+          let ids = bound_idents_of_binding p in
+          List.fold_left ids ~init:all ~f:(fun all i -> Javascript.IdentSet.add i all)
+    in
+    let all =
+      Javascript.IdentSet.fold
+        (fun x acc ->
+          match x with
+          | V i -> S.add i acc
+          | S _ -> acc)
+        all
+        S.empty
+    in
+    match block with
+    | Normal -> add_constraints state all ~offset:0 []
+    | Catch (v, _) -> add_constraints state all ~offset:5 (bound_idents_of_binding v)
+    | Params p -> add_constraints state all ~offset:0 (bound_idents_of_params p)
 end
 
 module Preserve : Strategy = struct
@@ -291,32 +254,44 @@ module Preserve : Strategy = struct
 
   let create size = { size; scopes = [] }
 
-  let record_block t scope ~catch param =
+  let record_block t scope (b : Js_traverse.block) =
     let defs =
-      match catch, param with
-      | true, [ V x ] -> S.singleton x
-      | true, [ S _ ] -> S.empty
-      | true, _ -> assert false
-      | false, _ -> scope.Js_traverse.def
+      match b with
+      | Catch (p, _) ->
+          bound_idents_of_binding p
+          @ Javascript.IdentSet.elements scope.Js_traverse.def_local
+      | Normal -> Javascript.IdentSet.elements scope.Js_traverse.def_local
+      | Params _ ->
+          Javascript.IdentSet.elements
+            (IdentSet.union scope.Js_traverse.def_var scope.Js_traverse.def_local)
     in
+    let defs =
+      List.fold_left
+        ~init:S.empty
+        ~f:(fun acc x ->
+          match (x : Javascript.ident) with
+          | V i -> S.add i acc
+          | S _ -> acc)
+        defs
+    in
+
     t.scopes <- (defs, scope) :: t.scopes
 
   let allocate_variables t ~count:_ =
     let names = Array.make t.size "" in
     List.iter t.scopes ~f:(fun (defs, state) ->
         let assigned =
-          List.fold_left
-            ~f:StringSet.union
-            ~init:StringSet.empty
-            [ state.Js_traverse.def_name; state.Js_traverse.use_name; Reserved.keyword ]
-        in
-        let assigned =
-          S.fold
+          IdentSet.fold
             (fun var acc ->
-              let name = names.(Var.idx var) in
-              if not (String.is_empty name) then StringSet.add name acc else acc)
-            (S.union state.Js_traverse.use state.Js_traverse.def)
-            assigned
+              match var with
+              | S { name = Utf8 s; _ } -> StringSet.add s acc
+              | V v ->
+                  let name = names.(Var.idx v) in
+                  if not (String.is_empty name) then StringSet.add name acc else acc)
+            (IdentSet.union
+               state.Js_traverse.use
+               (IdentSet.union state.Js_traverse.def_var state.Js_traverse.def_local))
+            Reserved.keyword
         in
         let _assigned =
           S.fold
@@ -351,34 +326,121 @@ class traverse record_block =
   object (m)
     inherit Js_traverse.free as super
 
-    method! block ?(catch = false) params =
-      record_block m#state ~catch params;
-      super#block params
+    method! record_block b =
+      record_block m#state b;
+      super#record_block b
+  end
+
+class traverse_labels h =
+  object
+    inherit Js_traverse.iter as super
+
+    val ldepth = 0
+
+    method fun_decl (_k, _params, body, _loc) =
+      let m = {<ldepth = 0>} in
+      m#function_body body
+
+    method statement =
+      function
+      | Labelled_statement (L l, (s, _)) ->
+          let m = {<ldepth = ldepth + 1>} in
+          Hashtbl.add h l ldepth;
+          m#statement s
+      | s -> super#statement s
+  end
+
+class name ident label =
+  object (m)
+    inherit Js_traverse.subst ident as super
+
+    method statement =
+      function
+      | Labelled_statement (l, (s, loc)) ->
+          Labelled_statement (label l, (m#statement s, loc))
+      | Break_statement (Some l) -> Break_statement (Some (label l))
+      | Continue_statement (Some l) -> Continue_statement (Some (label l))
+      | s -> super#statement s
   end
 
 let program' (module Strategy : Strategy) p =
   let nv = Var.count () in
   let state = Strategy.create nv in
+  let labels = Hashtbl.create 20 in
   let mapper = new traverse (Strategy.record_block state) in
   let p = mapper#program p in
-  mapper#block [];
-  if S.cardinal mapper#get_free <> 0
-  then
-    if true
-    then failwith_ "Some variables escaped (#%d)" (S.cardinal mapper#get_free)
-    else (
-      Format.eprintf "Some variables escaped (#%d)" (S.cardinal mapper#get_free);
-      S.iter (fun s -> Format.eprintf "%s@." (Var.to_string s)) mapper#get_free);
-  let names = Strategy.allocate_variables state ~count:mapper#state.Js_traverse.count in
-  (* if debug () then output_debug_information state coloring#state.Js_traverse.count; *)
-  let color = function
-    | V v ->
-        let name = names.(Var.idx v) in
-        assert (not (String.is_empty name));
-        ident ~var:v name
+  let () =
+    let o = new traverse_labels labels in
+    o#program p
+  in
+  mapper#record_block Normal;
+  let free =
+    IdentSet.filter
+      (function
+        | V _ -> true
+        | S _ -> false)
+      mapper#get_free
+  in
+  let has_free_var = IdentSet.cardinal free <> 0 in
+  let unallocated_names = ref Var.Set.empty in
+  let names = Strategy.allocate_variables state ~count:mapper#get_count in
+  (* ignore the choosen name for escaping/free [V _] variables *)
+  IdentSet.iter
+    (function
+      | S _ -> ()
+      | V x -> names.(Var.idx x) <- "")
+    free;
+  let ident = function
+    | V v -> (
+        if Config.Flag.stable_var ()
+        then
+          ident ~var:v (Utf8_string.of_string_exn (Printf.sprintf "v%d" (Code.Var.idx v)))
+        else
+          let name = names.(Var.idx v) in
+          match name with
+          | "" ->
+              unallocated_names := Var.Set.add v !unallocated_names;
+              V v
+          | _ -> ident ~var:v (Utf8_string.of_string_exn name))
     | x -> x
   in
-  (new Js_traverse.subst color)#program p
+  let label_printer = Var_printer.create Var_printer.Alphabet.javascript in
+  let max_label_depth = Hashtbl.fold (fun _ d acc -> max d acc) labels 0 in
+  let lname_per_depth =
+    Array.init (max_label_depth + 1) ~f:(fun i -> Var_printer.to_string label_printer i)
+  in
+  let label = function
+    | Label.S _ as l -> l
+    | L v ->
+        let i = Hashtbl.find labels v in
+        S (Utf8_string.of_string_exn lname_per_depth.(i))
+  in
+  let p = (new name ident label)#program p in
+  (if has_free_var || Var.Set.cardinal !unallocated_names > 0
+   then
+     let () =
+       if not (debug_shortvar () || debug ())
+       then
+         Format.eprintf
+           "Some variables escaped (#%d). Use [--debug js_assign] for more info.@."
+           (IdentSet.cardinal free)
+       else
+         let (_ : Source_map.info) =
+           Js_output.program
+             ~accept_unnamed_var:true
+             (Pretty_print.to_out_channel stderr)
+             p
+         in
+         Format.eprintf "Some variables escaped:";
+         IdentSet.iter
+           (function
+             | S _ -> ()
+             | V v -> Format.eprintf " <%s>" (Var.to_string v))
+           free;
+         Format.eprintf "@."
+     in
+     assert false);
+  p
 
 let program p =
   if Config.Flag.shortvar ()

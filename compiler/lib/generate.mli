@@ -21,7 +21,12 @@
 val f :
      Code.program
   -> exported_runtime:bool
-  -> live_vars:int array
+  -> live_vars:Deadcode.variable_uses
+  -> trampolined_calls:Effects.trampolined_calls
   -> should_export:bool
+  -> warn_on_unhandled_effect:bool
+  -> deadcode_sentinal:Code.Var.t
   -> Parse_bytecode.Debug.t
   -> Javascript.program
+
+val init : unit -> unit

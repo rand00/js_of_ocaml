@@ -103,49 +103,47 @@ let outside_color = Js.string (*"#0c1a0d"*) "#070718"
 
 let option var = Js.Optdef.get var (fun () -> Js.Unsafe.coerce (new%js Js.array_empty))
 
-class type style =
-  object
-    method border : float Js.optdef Js.readonly_prop
+class type style = object
+  method border : Js.number_t Js.optdef Js.readonly_prop
 
-    method padding : float Js.optdef Js.readonly_prop
+  method padding : Js.number_t Js.optdef Js.readonly_prop
 
-    method backgroundColor : Js.js_string Js.t Js.optdef Js.readonly_prop
+  method backgroundColor : Js.js_string Js.t Js.optdef Js.readonly_prop
 
-    method boundaryColor : Js.js_string Js.t Js.optdef Js.readonly_prop
+  method boundaryColor : Js.js_string Js.t Js.optdef Js.readonly_prop
 
-    method treeColor : Js.js_string Js.t Js.optdef Js.readonly_prop
+  method treeColor : Js.js_string Js.t Js.optdef Js.readonly_prop
 
-    method nodeColor : Js.js_string Js.t Js.optdef Js.readonly_prop
+  method nodeColor : Js.js_string Js.t Js.optdef Js.readonly_prop
 
-    method nodeBackgroundColor : Js.js_string Js.t Js.optdef Js.readonly_prop
+  method nodeBackgroundColor : Js.js_string Js.t Js.optdef Js.readonly_prop
 
-    method nodeFont : Js.js_string Js.t Js.optdef Js.readonly_prop
+  method nodeFont : Js.js_string Js.t Js.optdef Js.readonly_prop
 
-    method buttonColor : Js.js_string Js.t Js.optdef Js.readonly_prop
-  end
+  method buttonColor : Js.js_string Js.t Js.optdef Js.readonly_prop
+end
 
 let style : style Js.t = option Js.Unsafe.global##.hyp_style_
 
-class type messages =
-  object
-    method info : Js.js_string Js.t Js.optdef Js.readonly_prop
+class type messages = object
+  method info : Js.js_string Js.t Js.optdef Js.readonly_prop
 
-    method recenter : Js.js_string Js.t Js.optdef Js.readonly_prop
+  method recenter : Js.js_string Js.t Js.optdef Js.readonly_prop
 
-    method noRef : Js.js_string Js.t Js.optdef Js.readonly_prop
+  method noRef : Js.js_string Js.t Js.optdef Js.readonly_prop
 
-    method close : Js.js_string Js.t Js.optdef Js.readonly_prop
+  method close : Js.js_string Js.t Js.optdef Js.readonly_prop
 
-    method wikimediaCommons : Js.js_string Js.t Js.optdef Js.readonly_prop
+  method wikimediaCommons : Js.js_string Js.t Js.optdef Js.readonly_prop
 
-    method language : Js.js_string Js.t Js.optdef Js.readonly_prop
+  method language : Js.js_string Js.t Js.optdef Js.readonly_prop
 
-    method noRef : Js.js_string Js.t Js.optdef Js.readonly_prop
+  method noRef : Js.js_string Js.t Js.optdef Js.readonly_prop
 
-    method languages : Js.js_string Js.t Js.optdef Js.readonly_prop
+  method languages : Js.js_string Js.t Js.optdef Js.readonly_prop
 
-    method ok : Js.js_string Js.t Js.optdef Js.readonly_prop
-  end
+  method ok : Js.js_string Js.t Js.optdef Js.readonly_prop
+end
 
 let opt_style v default = Js.Optdef.get v (fun () -> default)
 
@@ -483,11 +481,26 @@ debug_msg (Format.sprintf "Touch end");
 let roundRectPath c x y w h r =
   let r = min r (min w h /. 2.) in
   c##beginPath;
-  c##moveTo (x +. r) y;
-  c##arcTo (x +. w) y (x +. w) (y +. r) r;
-  c##arcTo (x +. w) (y +. h) (x +. w -. r) (y +. h) r;
-  c##arcTo x (y +. h) x (y +. h -. r) r;
-  c##arcTo x y (x +. r) y r
+  c##moveTo (Js.float (x +. r)) (Js.float y);
+  c##arcTo
+    (Js.float (x +. w))
+    (Js.float y)
+    (Js.float (x +. w))
+    (Js.float (y +. r))
+    (Js.float r);
+  c##arcTo
+    (Js.float (x +. w))
+    (Js.float (y +. h))
+    (Js.float (x +. w -. r))
+    (Js.float (y +. h))
+    (Js.float r);
+  c##arcTo
+    (Js.float x)
+    (Js.float (y +. h))
+    (Js.float x)
+    (Js.float (y +. h -. r))
+    (Js.float r);
+  c##arcTo (Js.float x) (Js.float y) (Js.float (x +. r)) (Js.float y) (Js.float r)
 
 let text_size_div =
   let doc = Html.document in
@@ -540,7 +553,10 @@ let local_messages msgs : messages Js.t = option (Js.Unsafe.get msgs !language)
 (******)
 
 let screen_transform canvas =
-  let offset = opt_style style##.border 0.5 +. opt_style style##.padding 0. in
+  let offset =
+    Js.to_float (opt_style style##.border (Js.float 0.5))
+    +. Js.to_float (opt_style style##.padding (Js.float 0.))
+  in
   let w = canvas##.width in
   let h = canvas##.height in
   (*
@@ -567,47 +583,27 @@ let from_screen canvas x y =
 
 let pi = 4. *. atan 1.
 
-let ellipse_arc c cx cy rx ry start fin clock_wise =
-  c##save;
-  c##translate cx cy;
-  c##scale rx ry;
-  c##arc 0. 0. 1. start fin clock_wise;
-  c##restore
-
 let arc c (rx, ry, dx, dy) z0 z1 z2 =
   let rd = norm (sub z1 z0) in
   let start = atan2 (z1.y -. z0.y) (z1.x -. z0.x) in
   let fin = atan2 (z2.y -. z0.y) (z2.x -. z0.x) in
   c##beginPath;
   let alpha = mod_float (fin -. start +. (2. *. pi)) (2. *. pi) in
-  (*
-Firebug.console##log_4(start, fin, alpha, (alpha > pi));
-*)
-  if rx = ry
-  then
-    c##arc
-      ((z0.x *. rx) +. dx)
-      ((z0.y *. rx) +. dy)
-      (rd *. rx)
-      start
-      fin
-      (Js.bool (alpha > pi))
-  else
-    ellipse_arc
-      c
-      ((z0.x *. rx) +. dx)
-      ((z0.y *. ry) +. dy)
-      (rd *. rx)
-      (rd *. ry)
-      start
-      fin
-      (Js.bool (alpha > pi));
+  c##ellipse
+    (Js.float ((z0.x *. rx) +. dx))
+    (Js.float ((z0.y *. ry) +. dy))
+    (Js.float (rd *. rx))
+    (Js.float (rd *. ry))
+    (Js.float 0.)
+    (Js.float start)
+    (Js.float fin)
+    (Js.bool (alpha > pi));
   c##stroke
 
 let line c (rx, ry, dx, dy) z1 z2 =
   c##beginPath;
-  c##moveTo ((z1.x *. rx) +. dx) ((z1.y *. ry) +. dy);
-  c##lineTo ((z2.x *. rx) +. dx) ((z2.y *. ry) +. dy);
+  c##moveTo (Js.float ((z1.x *. rx) +. dx)) (Js.float ((z1.y *. ry) +. dy));
+  c##lineTo (Js.float ((z2.x *. rx) +. dx)) (Js.float ((z2.y *. ry) +. dy));
   c##stroke
 
 (*
@@ -642,18 +638,30 @@ let draw canvas vertices edges nodes boxes =
   Firebug.console##time (Js.string "draw");
   let c = canvas##getContext Html._2d_ in
   let ((rx, ry, dx, dy) as transf) = screen_transform canvas in
-  c##clearRect 0. 0. (float canvas##.width) (float canvas##.height);
-  let padding = opt_style style##.padding 0. in
+  c##clearRect
+    (Js.float 0.)
+    (Js.float 0.)
+    (Js.float (float canvas##.width))
+    (Js.float (float canvas##.height));
+  let padding = Js.to_float (opt_style style##.padding (Js.float 0.)) in
   c##beginPath;
-  ellipse_arc c dx dy (rx +. padding) (ry +. padding) 0. 7. Js._false;
+  c##ellipse
+    (Js.float dx)
+    (Js.float dy)
+    (Js.float (rx +. padding))
+    (Js.float (ry +. padding))
+    (Js.float 0.)
+    (Js.float 0.)
+    (Js.float 7.)
+    Js._false;
   Js.Optdef.iter style##.backgroundColor (fun color ->
       c##.fillStyle := color;
       c##fill);
   Js.Optdef.iter style##.boundaryColor (fun color ->
-      c##.lineWidth := 1.;
+      c##.lineWidth := Js.float 1.;
       c##.strokeStyle := color;
       c##stroke);
-  c##.lineWidth := 2.;
+  c##.lineWidth := Js.float 2.;
   c##.lineCap := Js.string "round";
   c##.strokeStyle := opt_style style##.treeColor tree_color;
   let rx, ry, _, _ = transf in
@@ -663,7 +671,7 @@ let draw canvas vertices edges nodes boxes =
     let z' = vertices.(j') in
     if rx *. ry *. sq_norm_sub z z' > 4.
     then (
-      c##.lineWidth := w;
+      c##.lineWidth := Js.float w;
       segment c transf z z')
   done;
   let image_count = ref 0 in
@@ -723,13 +731,18 @@ let draw canvas vertices edges nodes boxes =
 *)
                   let blur = 7. *. scale in
                   let offset = 5. *. scale in
-                  c##.shadowBlur := if blur < 1. then 0. else blur;
-                  c##.shadowOffsetX := if blur < 1. then 0. else offset;
-                  c##.shadowOffsetY := if blur < 1. then 0. else offset;
+                  c##.shadowBlur := Js.float (if blur < 1. then 0. else blur);
+                  c##.shadowOffsetX := Js.float (if blur < 1. then 0. else offset);
+                  c##.shadowOffsetY := Js.float (if blur < 1. then 0. else offset);
                   c##.shadowColor := Js.string "black");
                 let x = (z.x *. rx) +. dx in
                 let y = (z.y *. ry) +. dy in
-                c##drawImage_withSize img (x -. w) (y -. h) (2. *. w) (2. *. h);
+                c##drawImage_withSize
+                  img
+                  (Js.float (x -. w))
+                  (Js.float (y -. h))
+                  (Js.float (2. *. w))
+                  (Js.float (2. *. h));
                 (*
               c##drawImage_fromCanvasWithSize
                    (img, x -. w, y -. h, 2. *. w, 2. *. h);
@@ -759,19 +772,19 @@ let draw canvas vertices edges nodes boxes =
           c##beginPath;
           c##.fillStyle := opt_style style##.nodeBackgroundColor tree_color;
           c##arc
-            ((z.x *. rx) +. dx)
-            ((z.y *. ry) +. dy)
-            (sqrt ((w *. w) +. (h *. h)))
-            0.
-            7.
+            (Js.float ((z.x *. rx) +. dx))
+            (Js.float ((z.y *. ry) +. dy))
+            (Js.float (sqrt ((w *. w) +. (h *. h))))
+            (Js.float 0.)
+            (Js.float 7.)
             Js._false;
           c##fill);
         c##drawImage_fromCanvasWithSize
           txt
-          ((z.x *. rx) +. dx -. w)
-          ((z.y *. ry) +. dy -. h)
-          (2. *. w)
-          (2. *. h)
+          (Js.float ((z.x *. rx) +. dx -. w))
+          (Js.float ((z.y *. ry) +. dy -. h))
+          (Js.float (2. *. w))
+          (Js.float (2. *. h))
     | `Txt (_, None, _) | `None -> ()
   done;
   Firebug.console##timeEnd (Js.string "draw");
@@ -795,7 +808,7 @@ let rec randomize_tree n =
   let (Node (_info, ch)) = n in
   for i = Array.length ch - 1 downto 0 do
     let v = ch.(i) in
-    let j = truncate (Js.math##random *. float (i + 1)) in
+    let j = truncate (Js.to_float Js.math##random *. float (i + 1)) in
     ch.(i) <- ch.(j);
     ch.(j) <- v
   done;
@@ -815,7 +828,7 @@ let schedule_redraw () =
     need_redraw := true;
     let (_ : Html.animation_frame_request_id) =
       Html.window##requestAnimationFrame
-        (Js.wrap_callback (fun (_ : float) -> if !need_redraw then perform_redraw ()))
+        (Js.wrap_callback (fun _ -> if !need_redraw then perform_redraw ()))
     in
     ())
 
@@ -859,7 +872,7 @@ let compute_text_node info =
   c##.fillStyle := opt_style style##.nodeColor (Js.string "black");
   c##.textAlign := Js.string "center";
   c##.textBaseline := Js.string "middle";
-  c##fillText (Js.string info) (float w /. 2.) (float h /. 2.);
+  c##fillText (Js.string info) (Js.float (float w /. 2.)) (Js.float (float h /. 2.));
   canvas
 
 let compute_text_nodes node_names nodes =
@@ -909,9 +922,9 @@ let compute_neighbors nodes tree =
     Array.iter compute_frontiers l;
     frontiers.(i) <-
       (if Array.length l = 0
-      then [| status i |], [| status i |]
-      else
-        fst frontiers.(node_info l.(0)), snd frontiers.(node_info l.(Array.length l - 1)))
+       then [| status i |], [| status i |]
+       else
+         fst frontiers.(node_info l.(0)), snd frontiers.(node_info l.(Array.length l - 1)))
     (*
       (i :: fst frontiers.(node_info (List.hd l)),
        i :: snd frontiers.(node_info (list_tl l)))
@@ -1002,10 +1015,10 @@ let tree_layout node_names root =
         let w0 =
           ref
             (if is_root
-            then
-              let (Node (w, _)) = ch_weights.(0) in
-              (total_weight -. w) /. 2.
-            else 0.)
+             then
+               let (Node (w, _)) = ch_weights.(0) in
+               (total_weight -. w) /. 2.
+             else 0.)
         in
         array_map2
           (fun node weights ->
@@ -1098,19 +1111,19 @@ let close_button over =
   let canvas = create_canvas size size in
   let c = canvas##getContext Html._2d_ in
   c##save;
-  c##.lineWidth := 2.;
+  c##.lineWidth := Js.float 2.;
   c##.strokeStyle := color;
   if over
   then (
-    c##.shadowBlur := offset;
+    c##.shadowBlur := Js.float offset;
     c##.shadowColor := color);
   c##beginPath;
   let a = offset +. (lw /. sqrt 2.) in
   let b = float size -. offset -. (lw /. sqrt 2.) in
-  c##moveTo a a;
-  c##lineTo b b;
-  c##moveTo a b;
-  c##lineTo b a;
+  c##moveTo (Js.float a) (Js.float a);
+  c##lineTo (Js.float b) (Js.float b);
+  c##moveTo (Js.float a) (Js.float b);
+  c##lineTo (Js.float b) (Js.float a);
   c##stroke;
   c##restore;
   canvas##.className := Js.string (if over then "on" else "off");
@@ -1249,7 +1262,12 @@ let show_image all_messages image_info name small_image =
     | Some small_image ->
         let canvas = create_canvas info.width info.height in
         let c = canvas##getContext Html._2d_ in
-        c##drawImage_withSize small_image 0. 0. (float info.width) (float info.height);
+        c##drawImage_withSize
+          small_image
+          (Js.float 0.)
+          (Js.float 0.)
+          (Js.float (float info.width))
+          (Js.float (float info.height));
         canvas##.style##.display := Js.string "block";
         canvas##.style##.height := Js.string "auto";
         canvas##.style##.width := Js.string "auto";

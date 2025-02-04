@@ -43,12 +43,12 @@ type t =
   { common : Jsoo_cmdline.Arg.t
   ; (* compile option *)
     profile : Driver.profile option
-  ; source_map : (string option * Source_map.t) option
+  ; source_map : (string option * Source_map.Standard.t) option
   ; runtime_files : string list
   ; no_runtime : bool
-  ; runtime_only : bool
+  ; include_runtime : bool
   ; output_file : [ `Name of string | `Stdout ] * bool
-  ; input_file : string option
+  ; bytecode : [ `File of string | `Stdin | `None ]
   ; params : (string * string) list
   ; static_env : (string * string) list
   ; wrap_with_fun : [ `Iife | `Named of string | `Anonymous ]
@@ -58,7 +58,7 @@ type t =
   ; linkall : bool
   ; toplevel : bool
   ; export_file : string option
-  ; nocmis : bool
+  ; no_cmis : bool
   ; (* filesystem *)
     include_dirs : string list
   ; fs_files : string list
@@ -86,8 +86,9 @@ let wrap_with_fun_conv =
   in
   Arg.conv (conv, printer)
 
+let toplevel_section = "OPTIONS (TOPLEVEL)"
+
 let options =
-  let toplevel_section = "OPTIONS (TOPLEVEL)" in
   let filesystem_section = "OPTIONS (FILESYSTEM)" in
   let js_files =
     let doc =
@@ -121,16 +122,15 @@ let options =
     let doc = "Do not include the standard runtime." in
     Arg.(value & flag & info [ "noruntime"; "no-runtime" ] ~doc)
   in
-  let runtime_only =
+  let include_runtime =
     let doc =
-      "[DEPRECATED: use js_of_ocaml build-runtime instead]. Generate a JavaScript file \
-       containing/exporting the runtime only."
+      "Include (partial) runtime when compiling cmo and cma files to JavaScript."
     in
-    Arg.(value & flag & info [ "runtime-only" ] ~doc)
+    Arg.(value & flag & info [ "include-runtime" ] ~doc)
   in
   let no_sourcemap =
     let doc =
-      "Don't generate source map. All other source map related flags will be be ignored."
+      "Don't generate source map. All other source map related flags will be ignored."
     in
     Arg.(value & flag & info [ "no-sourcemap"; "no-source-map" ] ~doc)
   in
@@ -180,22 +180,36 @@ let options =
       value & opt (enum options) Target_env.Isomorphic & info [ "target-env" ] ~docv ~doc)
   in
   let toplevel =
-    let doc = "Compile a toplevel." in
+    let doc =
+      "Compile a toplevel and embed necessary cmis (unless '--no-cmis' is provided). \
+       Exported compilation units can be configured with '--export'.  Note you you'll \
+       also need to link against js_of_ocaml-toplevel."
+    in
     Arg.(value & flag & info [ "toplevel" ] ~docs:toplevel_section ~doc)
   in
   let export_file =
-    let doc = "File containing the list of unit to export in a toplevel." in
+    let doc =
+      "File containing the list of unit to export in a toplevel, with Dynlink or with \
+       --linkall. If absent, all units will be exported."
+    in
     Arg.(value & opt (some string) None & info [ "export" ] ~docs:toplevel_section ~doc)
   in
-  let linkall =
-    let doc = "Link all primitives." in
-    Arg.(value & flag & info [ "linkall" ] ~doc)
-  in
   let dynlink =
-    let doc = "Enable dynlink." in
+    let doc =
+      "Enable dynlink of bytecode files.  Use this if you want to be able to use the \
+       Dynlink module. Note that you'll also need to link with \
+       'js_of_ocaml-compiler.dynlink'."
+    in
     Arg.(value & flag & info [ "dynlink" ] ~doc)
   in
-  let nocmis =
+  let linkall =
+    let doc =
+      "Link all primitives and compilation units. Exported compilation units can be \
+       configured with '--export'."
+    in
+    Arg.(value & flag & info [ "linkall" ] ~doc)
+  in
+  let no_cmis =
     let doc = "Do not include cmis when compiling toplevel." in
     Arg.(value & flag & info [ "nocmis"; "no-cmis" ] ~docs:toplevel_section ~doc)
   in
@@ -252,10 +266,10 @@ let options =
       fs_files
       fs_output
       fs_external
-      nocmis
+      no_cmis
       profile
       no_runtime
-      runtime_only
+      include_runtime
       no_sourcemap
       sourcemap
       sourcemap_inline_in_js
@@ -266,59 +280,40 @@ let options =
       input_file
       js_files
       keep_unit_names =
+    let inline_source_content = not sourcemap_don't_inline_content in
     let chop_extension s = try Filename.chop_extension s with Invalid_argument _ -> s in
     let runtime_files = js_files in
-    let runtime_files =
-      if runtime_only && Filename.check_suffix input_file ".js"
-      then runtime_files @ [ input_file ]
-      else runtime_files
-    in
-    let linkall = linkall || toplevel || runtime_only in
-    let fs_external = fs_external || (toplevel && nocmis) || runtime_only in
-    let input_file =
-      match input_file, runtime_only with
-      | "-", _ | _, true -> None
-      | x, false -> Some x
+    let fs_external = fs_external || (toplevel && no_cmis) in
+    let bytecode =
+      match input_file with
+      | "-" -> `Stdin
+      | x -> `File x
     in
     let output_file =
       match output_file with
       | Some "-" -> `Stdout, true
       | Some s -> `Name s, true
       | None -> (
-          match input_file with
-          | Some s -> `Name (chop_extension s ^ ".js"), false
-          | None -> `Stdout, false)
+          match bytecode with
+          | `File s -> `Name (chop_extension s ^ ".js"), false
+          | `Stdin -> `Stdout, false)
     in
     let source_map =
       if (not no_sourcemap) && (sourcemap || sourcemap_inline_in_js)
       then
         let file, sm_output_file =
           match output_file with
-          | `Name file, _ when sourcemap_inline_in_js -> file, None
-          | `Name file, _ -> file, Some (chop_extension file ^ ".map")
-          | `Stdout, _ -> "STDIN", None
+          | `Name file, _ when sourcemap_inline_in_js -> Some file, None
+          | `Name file, _ -> Some file, Some (chop_extension file ^ ".map")
+          | `Stdout, _ -> None, None
         in
         Some
           ( sm_output_file
-          , { Source_map.version = 3
-            ; file
+          , { (Source_map.Standard.empty ~inline_source_content) with
+              file
             ; sourceroot = sourcemap_root
-            ; sources = []
-            ; sources_content = (if sourcemap_don't_inline_content then None else Some [])
-            ; names = []
-            ; mappings = []
             } )
       else None
-    in
-    let source_map =
-      if Option.is_some source_map && not Source_map_io.enabled
-      then (
-        warn
-          "Warning: '--source-map' flag ignored because js_of_ocaml was compiled without \
-           sourcemap support (install yojson to enable support)\n\
-           %!";
-        None)
-      else source_map
     in
     let params : (string * string) list = List.flatten set_param in
     let static_env : (string * string) list = List.flatten set_env in
@@ -337,13 +332,13 @@ let options =
       ; include_dirs
       ; runtime_files
       ; no_runtime
-      ; runtime_only
+      ; include_runtime
       ; fs_files
       ; fs_output
       ; fs_external
-      ; nocmis
+      ; no_cmis
       ; output_file
-      ; input_file
+      ; bytecode
       ; source_map
       ; keep_unit_names
       }
@@ -351,7 +346,7 @@ let options =
   let t =
     Term.(
       const build_t
-      $ Jsoo_cmdline.Arg.t
+      $ Lazy.force Jsoo_cmdline.Arg.t
       $ set_param
       $ set_env
       $ dynlink
@@ -363,10 +358,10 @@ let options =
       $ fs_files
       $ fs_output
       $ fs_external
-      $ nocmis
+      $ no_cmis
       $ profile
       $ noruntime
-      $ runtime_only
+      $ include_runtime
       $ no_sourcemap
       $ sourcemap
       $ sourcemap_inline_in_js
@@ -400,7 +395,7 @@ let options_runtime_only =
   in
   let no_sourcemap =
     let doc =
-      "Don't generate source map. All other source map related flags will be be ignored."
+      "Don't generate source map. All other source map related flags will be ignored."
     in
     Arg.(value & flag & info [ "no-sourcemap"; "no-source-map" ] ~doc)
   in
@@ -419,6 +414,18 @@ let options_runtime_only =
   let sourcemap_root =
     let doc = "root dir for source map." in
     Arg.(value & opt (some string) None & info [ "source-map-root" ] ~doc)
+  in
+  let toplevel =
+    let doc =
+      "Compile a toplevel and embed necessary cmis (unless '--no-cmis' is provided). \
+       Exported compilation units can be configured with '--export'.  Note you you'll \
+       also need to link against js_of_ocaml-toplevel."
+    in
+    Arg.(value & flag & info [ "toplevel" ] ~docs:toplevel_section ~doc)
+  in
+  let no_cmis =
+    let doc = "Do not include cmis when compiling toplevel." in
+    Arg.(value & flag & info [ "nocmis"; "no-cmis" ] ~docs:toplevel_section ~doc)
   in
   let target_env =
     let doc = "Runtime compile target." in
@@ -491,6 +498,8 @@ let options_runtime_only =
   in
   let build_t
       common
+      toplevel
+      no_cmis
       set_param
       set_env
       wrap_with_fun
@@ -507,6 +516,7 @@ let options_runtime_only =
       target_env
       output_file
       js_files =
+    let inline_source_content = not sourcemap_don't_inline_content in
     let chop_extension s = try Filename.chop_extension s with Invalid_argument _ -> s in
     let runtime_files = js_files in
     let output_file =
@@ -519,31 +529,17 @@ let options_runtime_only =
       then
         let file, sm_output_file =
           match output_file with
-          | `Name file, _ when sourcemap_inline_in_js -> file, None
-          | `Name file, _ -> file, Some (chop_extension file ^ ".map")
-          | `Stdout, _ -> "STDIN", None
+          | `Name file, _ when sourcemap_inline_in_js -> Some file, None
+          | `Name file, _ -> Some file, Some (chop_extension file ^ ".map")
+          | `Stdout, _ -> None, None
         in
         Some
           ( sm_output_file
-          , { Source_map.version = 3
-            ; file
+          , { (Source_map.Standard.empty ~inline_source_content) with
+              file
             ; sourceroot = sourcemap_root
-            ; sources = []
-            ; sources_content = (if sourcemap_don't_inline_content then None else Some [])
-            ; names = []
-            ; mappings = []
             } )
       else None
-    in
-    let source_map =
-      if Option.is_some source_map && not Source_map_io.enabled
-      then (
-        warn
-          "Warning: '--source-map' flag ignored because js_of_ocaml was compiled without \
-           sourcemap support (install yojson to enable support)\n\
-           %!";
-        None)
-      else source_map
     in
     let params : (string * string) list = List.flatten set_param in
     let static_env : (string * string) list = List.flatten set_env in
@@ -557,18 +553,18 @@ let options_runtime_only =
       ; dynlink = false
       ; linkall = false
       ; target_env
-      ; toplevel = false
+      ; toplevel
       ; export_file = None
       ; include_dirs
       ; runtime_files
       ; no_runtime
-      ; runtime_only = true
+      ; include_runtime = false
       ; fs_files
       ; fs_output
       ; fs_external
-      ; nocmis = true
+      ; no_cmis
       ; output_file
-      ; input_file = None
+      ; bytecode = `None
       ; source_map
       ; keep_unit_names = false
       }
@@ -576,7 +572,9 @@ let options_runtime_only =
   let t =
     Term.(
       const build_t
-      $ Jsoo_cmdline.Arg.t
+      $ Lazy.force Jsoo_cmdline.Arg.t
+      $ toplevel
+      $ no_cmis
       $ set_param
       $ set_env
       $ wrap_with_function

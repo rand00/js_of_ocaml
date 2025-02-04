@@ -52,12 +52,12 @@ let load_resource scheme ~prefix ~path:suffix =
   Lwt.async (fun () -> load_resource_aux filename url);
   Some ""
 
-let setup_pseudo_fs () =
+let setup_pseudo_fs ~load_cmis_from_server =
   Sys_js.mount ~path:"/dev/" (fun ~prefix:_ ~path:_ -> None);
   Sys_js.mount ~path:"/http/" (load_resource "http://");
   Sys_js.mount ~path:"/https/" (load_resource "https://");
   Sys_js.mount ~path:"/ftp/" (load_resource "ftp://");
-  Sys_js.mount ~path:"/home/" (load_resource "filesys/")
+  if load_cmis_from_server then Sys_js.mount ~path:"/home/" (load_resource "filesys/")
 
 let exec' s =
   let res : bool = JsooTop.use Format.std_formatter s in
@@ -112,16 +112,17 @@ module Version = struct
 end
 
 let setup_toplevel () =
+  Clflags.debug := true;
   JsooTop.initialize ();
   Sys.interactive := false;
   if Version.compare Version.current [ 4; 07 ] >= 0 then exec' "open Stdlib";
   exec'
     "module Lwt_main = struct\n\
-    \             let run t = match Lwt.state t with\n\
-    \               | Lwt.Return x -> x\n\
-    \               | Lwt.Fail e -> raise e\n\
-    \               | Lwt.Sleep -> failwith \"Lwt_main.run: thread didn't return\"\n\
-    \            end";
+    \  let run t = match Lwt.state t with\n\
+    \    | Lwt.Return x -> x\n\
+    \    | Lwt.Fail e -> raise e\n\
+    \    | Lwt.Sleep -> failwith \"Lwt_main.run: thread didn't return\"\n\
+    \ end";
   let header1 = Printf.sprintf "        %s version %%s" compiler_name in
   let header2 =
     Printf.sprintf "     Compiled with Js_of_ocaml version %s" Sys_js.js_of_ocaml_version
@@ -131,10 +132,10 @@ let setup_toplevel () =
   exec' "#enable \"pretty\";;";
   exec' "#disable \"shortvar\";;";
   Ppx_support.init ();
-  let[@alert "-deprecated"] new_directive n k = Hashtbl.add Toploop.directive_table n k in
-  new_directive
+  Toploop.add_directive
     "load_js"
-    (Toploop.Directive_string (fun name -> Js.Unsafe.global##load_script_ name));
+    (Toploop.Directive_string (fun name -> Js.Unsafe.global##load_script_ name))
+    { section = "js_of_ocaml-toplevel-example"; doc = "Load the given javascript file" };
   Sys.interactive := true;
   ()
 
@@ -275,11 +276,11 @@ let setup_share_button ~output =
 
 let setup_js_preview () =
   let ph = by_id "last-js" in
-  let runcode : string -> 'a = Js.Unsafe.global##.toplevelEval in
-  Js.Unsafe.global##.toplevelEval
-  := fun bc ->
-  ph##.innerHTML := Js.string bc;
-  runcode bc
+  let runcode : string -> 'a = !Js_of_ocaml_compiler_dynlink.eval_ref in
+  Js_of_ocaml_compiler_dynlink.eval_ref :=
+    fun bc ->
+      ph##.innerHTML := Js.string bc;
+      runcode bc
 
 let current_position = ref 0
 
@@ -465,7 +466,7 @@ let run _ =
   Sys_js.set_channel_filler stdin readline;
   setup_share_button ~output;
   setup_examples ~container ~textbox;
-  setup_pseudo_fs ();
+  setup_pseudo_fs ~load_cmis_from_server:false;
   setup_toplevel ();
   setup_js_preview ();
   setup_printers ();

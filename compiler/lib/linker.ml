@@ -20,6 +20,27 @@
 
 open! Stdlib
 
+type 'a pack =
+  | Ok of 'a
+  | Pack of string
+
+let unpack = function
+  | Ok x -> x
+  | Pack x -> Marshal.from_string x 0
+
+let pack = function
+  | Pack _ as x -> x
+  | Ok x -> Pack (Marshal.to_string x [])
+
+let to_stringset utf8_string_set =
+  Javascript.IdentSet.fold
+    (fun x acc ->
+      match x with
+      | S { name = Utf8 x; _ } -> StringSet.add x acc
+      | V _ -> acc)
+    utf8_string_set
+    StringSet.empty
+
 let loc pi =
   match pi with
   | { Parse_info.src = Some src; line; _ } | { Parse_info.name = Some src; line; _ } ->
@@ -34,10 +55,11 @@ end = struct
   let rec find p ~name =
     match p with
     | [] -> None
-    | ( Javascript.Function_declaration (Javascript.S { Javascript.name = n; _ }, l, _, _)
+    | ( Javascript.Function_declaration
+          (Javascript.S { Javascript.name = Utf8 n; _ }, (_, { list; rest = None }, _, _))
       , _ )
       :: _
-      when String.equal name n -> Some (List.length l)
+      when String.equal name n -> Some (List.length list)
     | _ :: rem -> find rem ~name
 end
 
@@ -46,13 +68,13 @@ module Named_value : sig
 end = struct
   class traverse_and_find_named_values all =
     object
-      inherit Js_traverse.map as self
+      inherit Js_traverse.iter as self
 
       method expression x =
         let open Javascript in
         (match x with
         | ECall
-            (EVar (S { name = "caml_named_value"; _ }), [ (EStr (v, _), `Not_spread) ], _)
+            (EVar (S { name = Utf8 "caml_named_value"; _ }), _, [ Arg (EStr (Utf8 v)) ], _)
           -> all := StringSet.add v !all
         | _ -> ());
         self#expression x
@@ -61,7 +83,7 @@ end = struct
   let find_all code =
     let all = ref StringSet.empty in
     let p = new traverse_and_find_named_values all in
-    ignore (p#program code);
+    p#program code;
     !all
 end
 
@@ -71,49 +93,58 @@ module Check = struct
       inherit Js_traverse.free as super
 
       method merge_info from =
-        let def = from#get_def_name in
-        let use = from#get_use_name in
-        let diff = StringSet.diff def use in
-        let diff = StringSet.remove name diff in
+        let def = from#get_def in
+        let use = from#get_use in
+        let diff = Javascript.IdentSet.diff def use in
         let diff =
-          StringSet.filter (fun s -> not (String.is_prefix s ~prefix:"_")) diff
+          Javascript.IdentSet.fold
+            (fun x acc ->
+              match x with
+              | S { name = Utf8_string.Utf8 s; _ } ->
+                  if String.is_prefix s ~prefix:"_" || String.equal s name
+                  then acc
+                  else s :: acc
+              | V _ -> acc)
+            diff
+            []
         in
-        if not (StringSet.is_empty diff)
-        then
-          warn
-            "WARN unused for primitive %s at %s:@. %s@."
-            name
-            (loc pi)
-            (String.concat ~sep:", " (StringSet.elements diff));
+
+        (match diff with
+        | [] -> ()
+        | l ->
+            warn
+              "WARN unused for primitive %s at %s:@. %s@."
+              name
+              (loc pi)
+              (String.concat ~sep:", " l));
         super#merge_info from
     end
 
-  let primitive ~name pi ~code ~requires =
+  let primitive ~name pi ~code ~requires ~has_flags =
     let free =
       if Config.Flag.warn_unused ()
       then new check_and_warn name pi
       else new Js_traverse.free
     in
     let _code = free#program code in
-    let freename = free#get_free_name in
+    let freename = to_stringset free#get_free in
     let freename =
       List.fold_left requires ~init:freename ~f:(fun freename x ->
           StringSet.remove x freename)
     in
     let freename = StringSet.diff freename Reserved.keyword in
     let freename = StringSet.diff freename Reserved.provided in
-    let freename = StringSet.remove Constant.global_object freename in
-    if StringSet.mem Constant.old_global_object freename && false
-       (* Don't warn yet, we want to give a transition period where both
-          "globalThis" and "joo_global_object" are allowed without extra
-          noise *)
+    let freename = StringSet.remove Global_constant.global_object freename in
+    let freename = if has_flags then StringSet.remove "FLAG" freename else freename in
+    if StringSet.mem Global_constant.old_global_object freename
     then
       warn
         "warning: %s: 'joo_global_object' is being deprecated, please use `globalThis` \
          instead@."
         (loc pi);
-    let freename = StringSet.remove Constant.old_global_object freename in
-    if not (StringSet.mem name free#get_def_name)
+    let freename = StringSet.remove Global_constant.old_global_object freename in
+    let defname = to_stringset free#get_def in
+    if not (StringSet.mem name defname)
     then
       warn
         "warning: primitive code does not define value with the expected name: %s (%s)@."
@@ -138,16 +169,32 @@ module Fragment = struct
   type fragment_ =
     { provides : provides option
     ; requires : string list
+    ; has_macro : bool
     ; version_constraint_ok : bool
     ; weakdef : bool
     ; always : bool
-    ; code : Javascript.program
-    ; js_string : bool option
+    ; code : Javascript.program pack
+    ; conditions : bool StringMap.t
     ; fragment_target : Target_env.t option
+    ; aliases : StringSet.t
+    ; deprecated : string option
     }
 
+  let allowed_flags =
+    List.fold_left
+      ~f:(fun m (k, v) -> StringMap.add k v m)
+      ~init:StringMap.empty
+      [ "js-string", Config.Flag.use_js_string
+      ; "effects", Config.Flag.effects
+      ; ( "wasm"
+        , fun () ->
+            match Config.target () with
+            | `JavaScript -> false
+            | `Wasm -> true )
+      ]
+
   type t =
-    | Always_include of Javascript.program
+    | Always_include of Javascript.program pack
     | Fragment of fragment_
 
   let provides = function
@@ -171,12 +218,12 @@ module Fragment = struct
                 } as provides)
          ; _
          } as fragment) ->
-        let code = Macro.f fragment.code in
+        let code, has_flags = Macro.f ~flags:false (unpack fragment.code) in
         let named_values = Named_value.find_all code in
         let arity = Arity.find code ~name in
-        Check.primitive ~name pi ~code ~requires:fragment.requires;
+        Check.primitive ~has_flags ~name pi ~code ~requires:fragment.requires;
         let provides = Some { provides with named_values; arity } in
-        Fragment { fragment with code; provides }
+        Fragment { fragment with code = Ok code; provides; has_macro = has_flags }
 
   let version_match =
     List.for_all ~f:(fun (op, str) -> op Ocaml_version.(compare current (split str)) 0)
@@ -197,26 +244,10 @@ module Fragment = struct
           pi.Parse_info.line
           pi.Parse_info.col
     in
-    let rec collect_without_annot acc = function
-      | [] -> List.rev acc, []
-      | (x, []) :: program -> collect_without_annot (x :: acc) program
-      | (_, _ :: _) :: _ as program -> List.rev acc, program
-    in
-    let rec collect acc program =
-      match program with
-      | [] -> List.rev acc
-      | (x, []) :: program ->
-          let code, program = collect_without_annot [ x ] program in
-          collect (([], code) :: acc) program
-      | (x, annots) :: program ->
-          let code, program = collect_without_annot [ x ] program in
-          collect ((annots, code) :: acc) program
-    in
-    let blocks = collect [] program in
     let res =
-      List.rev_map blocks ~f:(fun (annot, code) ->
+      List.map program ~f:(fun (annot, code) ->
           match annot with
-          | [] -> Always_include code
+          | [] -> Always_include (Ok code)
           | annot ->
               let initial_fragment : fragment_ =
                 { provides = None
@@ -224,9 +255,12 @@ module Fragment = struct
                 ; version_constraint_ok = true
                 ; weakdef = false
                 ; always = false
-                ; code
-                ; js_string = None
+                ; has_macro = false
+                ; code = Ok code
+                ; conditions = StringMap.empty
                 ; fragment_target = None
+                ; aliases = StringSet.empty
+                ; deprecated = None
                 }
               in
               let fragment =
@@ -255,22 +289,27 @@ module Fragment = struct
                         }
                     | `Weakdef -> { fragment with weakdef = true }
                     | `Always -> { fragment with always = true }
-                    | (`Ifnot "js-string" | `If "js-string") as i ->
+                    | `Alias name ->
+                        { fragment with aliases = StringSet.add name fragment.aliases }
+                    | `Deprecated txt -> { fragment with deprecated = Some txt }
+                    | `If name when Option.is_some (Target_env.of_string name) ->
+                        if Option.is_some fragment.fragment_target
+                        then Format.eprintf "Duplicated target_env in %s\n" (loc pi);
+                        { fragment with fragment_target = Target_env.of_string name }
+                    | (`Ifnot v | `If v) when not (StringMap.mem v allowed_flags) ->
+                        Format.eprintf "Unkown flag %S in %s\n" v (loc pi);
+                        fragment
+                    | (`Ifnot v | `If v) as i ->
+                        if StringMap.mem v fragment.conditions
+                        then Format.eprintf "Duplicated %s in %s\n" v (loc pi);
                         let b =
                           match i with
                           | `If _ -> true
                           | `Ifnot _ -> false
                         in
-                        if Option.is_some fragment.js_string
-                        then Format.eprintf "Duplicated js-string in %s\n" (loc pi);
-                        { fragment with js_string = Some b }
-                    | `If name when Option.is_some (Target_env.of_string name) ->
-                        if Option.is_some fragment.fragment_target
-                        then Format.eprintf "Duplicated target_env in %s\n" (loc pi);
-                        { fragment with fragment_target = Target_env.of_string name }
-                    | `If name | `Ifnot name ->
-                        Format.eprintf "Unkown flag %S in %s\n" name (loc pi);
-                        fragment)
+                        { fragment with
+                          conditions = StringMap.add v b fragment.conditions
+                        })
               in
               Fragment fragment)
     in
@@ -279,17 +318,16 @@ module Fragment = struct
   let parse_builtin builtin =
     let filename = Builtins.File.name builtin in
     let content = Builtins.File.content builtin in
-    let lexbuf = Lexing.from_string content in
-    let lexbuf =
-      { lexbuf with lex_curr_p = { lexbuf.lex_curr_p with pos_fname = filename } }
-    in
-    let lex = Parse_js.Lexer.of_lexbuf lexbuf in
-    parse_from_lex ~filename lex
+    match Builtins.File.fragments builtin with
+    | None ->
+        let lex = Parse_js.Lexer.of_string ~filename content in
+        parse_from_lex ~filename lex
+    | Some fragments -> Marshal.from_string fragments 0
 
   let parse_string string =
-    let lexbuf = Lexing.from_string string in
-    let lex = Parse_js.Lexer.of_lexbuf lexbuf in
-    parse_from_lex ~filename:"<dummy>" lex
+    let filename = "<string>" in
+    let lex = Parse_js.Lexer.of_string ~filename string in
+    parse_from_lex ~filename lex
 
   let parse_file f =
     let file =
@@ -299,6 +337,10 @@ module Fragment = struct
     in
     let lex = Parse_js.Lexer.of_file file in
     parse_from_lex ~filename:file lex
+
+  let pack = function
+    | Always_include x -> Always_include (pack x)
+    | Fragment f -> Fragment { f with code = pack f.code }
 end
 
 (*
@@ -339,6 +381,12 @@ let all_return p =
   try loop_all_sources p; true with May_not_return -> false
 *)
 
+type always_required' =
+  { ar_filename : string
+  ; ar_program : Javascript.program pack
+  ; ar_requires : string list
+  }
+
 type always_required =
   { filename : string
   ; program : Javascript.program
@@ -348,7 +396,10 @@ type always_required =
 type state =
   { ids : IntSet.t
   ; always_required_codes : always_required list
-  ; codes : Javascript.program list
+  ; codes : (Javascript.program pack * bool) list
+  ; deprecation : (int list * string) list
+  ; missing : StringSet.t
+  ; include_ : string -> bool
   }
 
 type output =
@@ -359,6 +410,7 @@ type output =
 type provided =
   { id : int
   ; pi : Parse_info.t
+  ; filename : string
   ; weakdef : bool
   ; target_env : Target_env.t
   }
@@ -375,12 +427,27 @@ let reset () =
   always_included := [];
   Hashtbl.clear provided;
   Hashtbl.clear provided_rev;
-  Hashtbl.clear code_pieces
+  Hashtbl.clear code_pieces;
+  Primitive.reset ();
+  Generate.init ()
+
+let list_all ?from () =
+  let include_ =
+    match from with
+    | None -> fun _ _ -> true
+    | Some l -> fun fn _nm -> List.mem fn ~set:l
+  in
+  Hashtbl.fold
+    (fun nm p set -> if include_ p.filename nm then StringSet.add nm set else set)
+    provided
+    StringSet.empty
 
 let load_fragment ~target_env ~filename (f : Fragment.t) =
   match f with
   | Always_include code ->
-      always_included := { filename; program = code; requires = [] } :: !always_included;
+      always_included :=
+        { ar_filename = filename; ar_program = code; ar_requires = [] }
+        :: !always_included;
       `Ok
   | Fragment
       { provides
@@ -389,23 +456,34 @@ let load_fragment ~target_env ~filename (f : Fragment.t) =
       ; weakdef
       ; always
       ; code
-      ; js_string
       ; fragment_target
+      ; aliases
+      ; has_macro
+      ; conditions
+      ; deprecated
       } -> (
-      let ignore_because_of_js_string =
-        match js_string, Config.Flag.use_js_string () with
-        | Some true, false | Some false, true -> true
-        | None, _ | Some true, true | Some false, false -> false
+      let should_ignore =
+        StringMap.exists
+          (fun flag b ->
+            not (Bool.equal b (StringMap.find flag Fragment.allowed_flags ())))
+          conditions
       in
-      if (not version_constraint_ok) || ignore_because_of_js_string
+      if (not version_constraint_ok) || should_ignore
       then `Ignored
       else
         match provides with
         | None ->
+            if not (StringSet.is_empty aliases)
+            then
+              error
+                "Found JavaScript code with neither `//Alias` and not `//Provides` in \
+                 file %S@."
+                filename;
             if always
             then (
               always_included :=
-                { filename; program = code; requires } :: !always_included;
+                { ar_filename = filename; ar_program = code; ar_requires = requires }
+                :: !always_included;
               `Ok)
             else
               error
@@ -465,36 +543,45 @@ let load_fragment ~target_env ~filename (f : Fragment.t) =
               let id = Hashtbl.length provided in
               Primitive.register name kind ka arity;
               StringSet.iter Primitive.register_named_value named_values;
-              Hashtbl.add provided name { id; pi; weakdef; target_env = fragment_target };
+              Hashtbl.add
+                provided
+                name
+                { id; pi; filename; weakdef; target_env = fragment_target };
               Hashtbl.add provided_rev id (name, pi);
-              Hashtbl.add code_pieces id (code, requires);
+              Hashtbl.add code_pieces id (code, has_macro, requires, deprecated);
+              StringSet.iter (fun alias -> Primitive.alias alias name) aliases;
               `Ok)
 
-let get_provided () =
-  Hashtbl.fold (fun k _ acc -> StringSet.add k acc) provided StringSet.empty
-
 let check_deps () =
-  let provided = get_provided () in
+  let provided = list_all () in
   Hashtbl.iter
-    (fun id (code, requires) ->
-      let traverse = new Js_traverse.free in
-      let _js = traverse#program code in
-      let free = traverse#get_free_name in
-      let requires = List.fold_right requires ~init:StringSet.empty ~f:StringSet.add in
-      let real = StringSet.inter free provided in
-      let missing = StringSet.diff real requires in
-      if not (StringSet.is_empty missing)
-      then
-        try
-          let name, ploc = Hashtbl.find provided_rev id in
-          warn
-            "code providing %s (%s) may miss dependencies: %s\n"
-            name
-            (loc ploc)
-            (String.concat ~sep:", " (StringSet.elements missing))
-        with Not_found ->
-          (* there is no //Provides for this piece of code *)
-          (* FIXME handle missing deps in this case *)
+    (fun id (code, _has_macro, requires, _deprecated) ->
+      match code with
+      | Ok code -> (
+          let traverse = new Js_traverse.free in
+          let _js = traverse#program code in
+          let free = to_stringset traverse#get_free in
+          let requires =
+            List.fold_right requires ~init:StringSet.empty ~f:StringSet.add
+          in
+          let real = StringSet.inter free provided in
+          let missing = StringSet.diff real requires in
+          if not (StringSet.is_empty missing)
+          then
+            try
+              let name, ploc = Hashtbl.find provided_rev id in
+              warn
+                "code providing %s (%s) may miss dependencies: %s\n"
+                name
+                (loc ploc)
+                (String.concat ~sep:", " (StringSet.elements missing))
+            with Not_found ->
+              (* there is no //Provides for this piece of code *)
+              (* FIXME handle missing deps in this case *)
+              ())
+      | Pack _ ->
+          (* We only have [Pack] for the builtin runtime, which has
+             been checked already (before it was embedded *)
           ())
     code_pieces
 
@@ -514,17 +601,16 @@ let load_files ~target_env l =
   check_deps ()
 
 (* resolve *)
-let rec resolve_dep_name_rev visited path nm =
-  let id =
-    try
-      let x = Hashtbl.find provided nm in
-      x.id
-    with Not_found -> error "missing dependency '%s'@." nm
-  in
-  resolve_dep_id_rev visited path id
+let rec resolve_dep_name_rev state path nm =
+  match Hashtbl.find provided nm with
+  | x ->
+      if state.include_ x.filename
+      then resolve_dep_id_rev state path x.id
+      else { state with missing = StringSet.add nm state.missing }
+  | exception Not_found -> { state with missing = StringSet.add nm state.missing }
 
-and resolve_dep_id_rev visited path id =
-  if IntSet.mem id visited.ids
+and resolve_dep_id_rev state path id =
+  if IntSet.mem id state.ids
   then (
     if List.memq id ~set:path
     then
@@ -533,49 +619,62 @@ and resolve_dep_id_rev visited path id =
         (String.concat
            ~sep:", "
            (List.map path ~f:(fun id -> fst (Hashtbl.find provided_rev id))));
-    visited)
+    state)
   else
     let path = id :: path in
-    let code, req = Hashtbl.find code_pieces id in
-    let visited = { visited with ids = IntSet.add id visited.ids } in
-    let visited =
-      List.fold_left req ~init:visited ~f:(fun visited nm ->
-          resolve_dep_name_rev visited path nm)
+    let code, has_macro, req, deprecated = Hashtbl.find code_pieces id in
+    let state = { state with ids = IntSet.add id state.ids } in
+    let state =
+      List.fold_left req ~init:state ~f:(fun state nm ->
+          resolve_dep_name_rev state path nm)
     in
-    let visited = { visited with codes = code :: visited.codes } in
-    visited
+    let deprecation =
+      match deprecated with
+      | None -> state.deprecation
+      | Some txt -> (path, txt) :: state.deprecation
+    in
+    let state = { state with codes = (code, has_macro) :: state.codes; deprecation } in
+    state
 
-let init () =
-  { ids = IntSet.empty; always_required_codes = List.rev !always_included; codes = [] }
+let proj_always_required { ar_filename; ar_requires; ar_program } =
+  { filename = ar_filename; requires = ar_requires; program = unpack ar_program }
 
-let resolve_deps ?(linkall = false) visited_rev used =
-  (* link the special files *)
-  let missing, visited_rev =
-    if linkall
-    then
-      (* link all primitives *)
-      let prog, set =
-        Hashtbl.fold
-          (fun nm _ (visited, set) ->
-            resolve_dep_name_rev visited [] nm, StringSet.add nm set)
-          provided
-          (visited_rev, StringSet.empty)
-      in
-      let missing = StringSet.diff used set in
-      missing, prog
-    else
-      (* link used primitives *)
-      StringSet.fold
-        (fun nm (missing, visited) ->
-          if Hashtbl.mem provided nm
-          then missing, resolve_dep_name_rev visited [] nm
-          else StringSet.add nm missing, visited)
-        used
-        (StringSet.empty, visited_rev)
+let init ?from () =
+  let include_ =
+    match from with
+    | None -> fun _ -> true
+    | Some l -> fun fn -> List.mem fn ~set:l
   in
-  visited_rev, missing
+  { ids = IntSet.empty
+  ; always_required_codes =
+      List.rev
+        (List.filter_map !always_included ~f:(fun x ->
+             if include_ x.ar_filename then Some (proj_always_required x) else None))
+  ; deprecation = []
+  ; codes = []
+  ; include_
+  ; missing = StringSet.empty
+  }
 
-let link program (state : state) =
+let do_check_missing state =
+  if not (StringSet.is_empty state.missing)
+  then error "missing dependency '%s'@." (StringSet.choose state.missing)
+
+let resolve_deps ?(check_missing = true) state used =
+  (* link the special files *)
+  let missing, state =
+    StringSet.fold
+      (fun nm (missing, visited) ->
+        if Hashtbl.mem provided nm
+        then missing, resolve_dep_name_rev visited [] nm
+        else StringSet.add nm missing, visited)
+      used
+      (StringSet.empty, state)
+  in
+  if check_missing then do_check_missing state;
+  state, missing
+
+let link ?(check_missing = true) program (state : state) =
   let always, always_required =
     List.partition
       ~f:(function
@@ -590,9 +689,42 @@ let link program (state : state) =
           List.fold_left always.requires ~init:state ~f:(fun state nm ->
               resolve_dep_name_rev state [] nm)
         in
-        { state with codes = always.program :: state.codes })
+        { state with codes = (Ok always.program, false) :: state.codes })
   in
-  let runtime = List.flatten (List.rev (program :: state.codes)) in
+  if check_missing then do_check_missing state;
+  List.iter state.deprecation ~f:(fun (path, txt) ->
+      match path with
+      | [] -> assert false
+      | [ x ] ->
+          if false
+          then
+            let name = fst (Hashtbl.find provided_rev x) in
+            warn "The runtime primitive [%s] is deprecated. %s\n" name txt
+      | x :: path ->
+          let name = fst (Hashtbl.find provided_rev x) in
+          let path =
+            String.concat
+              ~sep:"\n"
+              (List.map path ~f:(fun id ->
+                   let nm, loc = Hashtbl.find provided_rev id in
+                   Printf.sprintf "-> %s:%s" nm (Parse_info.to_string loc)))
+          in
+          warn
+            "The runtime primitive [%s] is deprecated. %s.  Used by:\n%s\n"
+            name
+            txt
+            path);
+
+  let codes =
+    List.map state.codes ~f:(fun (x, has_macro) ->
+        let c = unpack x in
+        if has_macro
+        then
+          let c, _ = Macro.f ~flags:true c in
+          c
+        else c)
+  in
+  let runtime = List.flatten (List.rev (program :: codes)) in
   { runtime_code = runtime; always_required_codes = always_required }
 
 let all state =
@@ -605,8 +737,17 @@ let all state =
     state.ids
     []
 
+let missing state = StringSet.elements state.missing
+
 let origin ~name =
   try
     let x = Hashtbl.find provided name in
     x.pi.Parse_info.src
   with Not_found -> None
+
+let deprecated ~name =
+  try
+    let x = Hashtbl.find provided name in
+    let _, _, _, deprecated = Hashtbl.find code_pieces x.id in
+    Option.is_some deprecated
+  with Not_found -> false

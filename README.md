@@ -1,6 +1,8 @@
 # Js_of_ocaml (jsoo)
 
 [![Build Status](https://github.com/ocsigen/js_of_ocaml/workflows/build/badge.svg?branch=master)](https://github.com/ocsigen/js_of_ocaml/actions)
+[![Update Web site - build](https://github.com/ocsigen/js_of_ocaml/actions/workflows/siteupdate.yml/badge.svg)](https://github.com/ocsigen/js_of_ocaml/actions/workflows/siteupdate.yml)
+[![Update Web site - deploy](https://github.com/ocsigen/js_of_ocaml/actions/workflows/pages/pages-build-deployment/badge.svg)](https://github.com/ocsigen/js_of_ocaml/actions/workflows/pages/pages-build-deployment)
 
 Js_of_ocaml is a compiler from OCaml bytecode to JavaScript. It makes it
 possible to run pure OCaml programs in JavaScript environment like browsers and
@@ -29,13 +31,6 @@ Js_of_ocaml is composed of multiple packages:
 See
 [opam](https://github.com/ocsigen/js_of_ocaml/blob/master/js_of_ocaml-compiler.opam)
 file for version constraints.
-
-### optional
-
-- [lwt](https://github.com/ocsigen/lwt)
-- [tyxml](https://github.com/ocsigen/tyxml)
-- [reactiveData](https://github.com/ocsigen/reactiveData)
-- [yojson](https://github.com/mjambon/yojson)
 
 ### Toplevel requirements
 
@@ -92,6 +87,8 @@ optimized:
   [More](http://ocsigen.org/js_of_ocaml/dev/manual/tailcall) about tail call
   optimization.
 
+Effect handlers are supported with the `--enable=effects` flag.
+
 ## Data representation
 
 Data representation differs from the usual one. Most notably, integers are 32
@@ -99,12 +96,13 @@ bits (rather than 31 bits or 63 bits), which is their natural size in
 JavaScript, and floats are not boxed. As a consequence, marshalling, polymorphic
 comparison, and hashing functions can yield results different from usual:
 
-- marshalling of floats is not supported (unmarshalling works);
+- marshalling floats might generate different output. Such output should not be
+  unmarshalled using the standard ocaml runtime (native or bytecode).
 - the polymorphic hash function will not give the same results on datastructures
   containing floats;
 - these functions may be more prone to stack overflow.
 
-| Ocaml | javascript |
+| OCaml | javascript |
 | ------------- | ------------- |
 | int   | number (32bit int)  |
 | int32 | number (32bit int)  |
@@ -118,7 +116,7 @@ comparison, and hashing functions can yield results different from usual:
 | array | block with tag 0 (e.g. `[\|1;2\|] => [0,1,2]`) |
 | tuple | block with tag 0 (e.g. `(1,2) => [0,1,2]`) |
 | record | block (e.g. `{x=1;y=2} => [0,1,2]`) |
-| contructor with arguments | block (e.g. `C (1, 2) => [tag,1,2]`) |
+| constructor with arguments | block (e.g. `C (1, 2) => [tag,1,2]`) |
 | module | block |
 | exception and extensible variant | block or immediate |
 | function | function |
@@ -127,12 +125,8 @@ comparison, and hashing functions can yield results different from usual:
 
 ## Toplevel
 
-- [OCaml 4.04.2](http://ocsigen.github.io/js_of_ocaml/toplevel/#version=4.04.2)
-  includes Base, Core_kernel, Async_kernel, Async_js
 - [OCaml 4.04.0+BER](http://ocsigen.github.io/js_of_ocaml/toplevel/#version=4.04.0+BER)
   see http://okmij.org/ftp/ML/MetaOCaml.html
-- [OCaml 4.05.0](http://ocsigen.github.io/js_of_ocaml/toplevel/#version=4.05.0)
-  includes Base, Core_kernel, Async_kernel, Async_js
 - [OCaml 4.06.0](http://ocsigen.github.io/js_of_ocaml/toplevel/#version=4.06.0)
   includes Base, Core_kernel, Async_kernel, Async_js
 

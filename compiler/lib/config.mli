@@ -19,7 +19,13 @@
 module Flag : sig
   val available : unit -> string list
 
+  val find : string -> bool
+
+  val set : string -> bool -> unit
+
   val deadcode : unit -> bool
+
+  val globaldeadcode : unit -> bool
 
   val optcall : unit -> bool
 
@@ -32,6 +38,8 @@ module Flag : sig
   val share_constant : unit -> bool
 
   val staticeval : unit -> bool
+
+  val effects : unit -> bool
 
   val genprim : unit -> bool
 
@@ -49,8 +57,6 @@ module Flag : sig
 
   val excwrap : unit -> bool
 
-  val include_cmis : unit -> bool
-
   val improved_stacktrace : unit -> bool
 
   val warn_unused : unit -> bool
@@ -63,11 +69,18 @@ module Flag : sig
 
   val check_magic : unit -> bool
 
+  val header : unit -> bool
+
+  val auto_link : unit -> bool
+
+  val es6 : unit -> bool
+
   val enable : string -> unit
 
   val disable : string -> unit
 end
 
+(** This module contains parameters that may be modified through command-line flags. *)
 module Param : sig
   val set : string -> string -> unit
 
@@ -87,4 +100,18 @@ module Param : sig
 
   (* | TcWhile *)
   val tailcall_optim : unit -> tc
+
+  val lambda_lifting_threshold : unit -> int
+
+  val lambda_lifting_baseline : unit -> int
 end
+
+(****)
+
+(** {2 Parameters that are constant across a program run} *)
+
+(** These parameters should be set at most once at the beginning of the program. *)
+
+val target : unit -> [ `JavaScript | `Wasm ]
+
+val set_target : [ `JavaScript | `Wasm ] -> unit

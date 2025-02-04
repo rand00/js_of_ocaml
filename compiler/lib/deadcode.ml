@@ -28,10 +28,17 @@ open Code
 type def =
   | Expr of expr
   | Var of Var.t
+  | Field_update of Var.t
+
+let add_def defs x i =
+  let idx = Var.idx x in
+  defs.(idx) <- i :: defs.(idx)
+
+type variable_uses = int array
 
 type t =
   { blocks : block Addr.Map.t
-  ; live : int array
+  ; live : variable_uses
   ; defs : def list array
   ; mutable reachable_blocks : Addr.Set.t
   ; pure_funs : Var.Set.t
@@ -46,22 +53,27 @@ let pure_expr pure_funs e = Pure_fun.pure_expr pure_funs e && Config.Flag.deadco
 let rec mark_var st x =
   let x = Var.idx x in
   st.live.(x) <- st.live.(x) + 1;
-  if st.live.(x) = 1 then List.iter st.defs.(x) ~f:(fun e -> mark_def st e)
+  if st.live.(x) = 1 then List.iter st.defs.(x) ~f:(fun e -> mark_def st x e)
 
-and mark_def st d =
+and mark_def st x d =
   match d with
-  | Var x -> mark_var st x
+  | Var y -> mark_var st y
+  | Field_update y ->
+      (* A [Set_field (x, _, y)] becomes live *)
+      st.live.(x) <- st.live.(x) + 1;
+      mark_var st y
   | Expr e -> if pure_expr st.pure_funs e then mark_expr st e
 
 and mark_expr st e =
   match e with
   | Constant _ -> ()
-  | Apply (f, l, _) ->
+  | Apply { f; args; _ } ->
       mark_var st f;
-      List.iter l ~f:(fun x -> mark_var st x)
-  | Block (_, a, _) -> Array.iter a ~f:(fun x -> mark_var st x)
-  | Field (x, _) -> mark_var st x
+      List.iter args ~f:(fun x -> mark_var st x)
+  | Block (_, a, _, _) -> Array.iter a ~f:(fun x -> mark_var st x)
+  | Field (x, _, _) -> mark_var st x
   | Closure (_, (pc, _)) -> mark_reachable st pc
+  | Special _ -> ()
   | Prim (_, l) ->
       List.iter l ~f:(fun x ->
           match x with
@@ -78,9 +90,15 @@ and mark_reachable st pc =
     List.iter block.body ~f:(fun i ->
         match i with
         | Let (_, e) -> if not (pure_expr st.pure_funs e) then mark_expr st e
-        | Set_field (x, _, y) ->
-            mark_var st x;
-            mark_var st y
+        | Event _ | Assign _ -> ()
+        | Set_field (x, _, _, y) -> (
+            match st.defs.(Var.idx x) with
+            | [ Expr (Block _) ] when st.live.(Var.idx x) = 0 ->
+                (* We will keep this instruction only if x is live *)
+                add_def st.defs x (Field_update y)
+            | _ ->
+                mark_var st x;
+                mark_var st y)
         | Array_set (x, y, z) ->
             mark_var st x;
             mark_var st y;
@@ -89,16 +107,15 @@ and mark_reachable st pc =
     match block.branch with
     | Return x | Raise (x, _) -> mark_var st x
     | Stop -> ()
-    | Branch cont | Poptrap (cont, _) -> mark_cont_reachable st cont
+    | Branch cont | Poptrap cont -> mark_cont_reachable st cont
     | Cond (x, cont1, cont2) ->
         mark_var st x;
         mark_cont_reachable st cont1;
         mark_cont_reachable st cont2
-    | Switch (x, a1, a2) ->
+    | Switch (x, a1) ->
         mark_var st x;
-        Array.iter a1 ~f:(fun cont -> mark_cont_reachable st cont);
-        Array.iter a2 ~f:(fun cont -> mark_cont_reachable st cont)
-    | Pushtrap (cont1, _, cont2, _) ->
+        Array.iter a1 ~f:(fun cont -> mark_cont_reachable st cont)
+    | Pushtrap (cont1, _, cont2) ->
         mark_cont_reachable st cont1;
         mark_cont_reachable st cont2)
 
@@ -107,13 +124,14 @@ and mark_reachable st pc =
 let live_instr st i =
   match i with
   | Let (x, e) -> st.live.(Var.idx x) > 0 || not (pure_expr st.pure_funs e)
-  | Set_field _ | Offset_ref _ | Array_set _ -> true
+  | Assign (x, _) | Set_field (x, _, _, _) -> st.live.(Var.idx x) > 0
+  | Event _ | Offset_ref _ | Array_set _ -> true
 
 let rec filter_args st pl al =
   match pl, al with
   | x :: pl, y :: al ->
       if st.live.(Var.idx x) > 0 then y :: filter_args st pl al else filter_args st pl al
-  | [], _ -> []
+  | [], [] -> []
   | _ -> assert false
 
 let filter_cont blocks st (pc, args) =
@@ -131,18 +149,10 @@ let filter_live_last blocks st l =
   | Branch cont -> Branch (filter_cont blocks st cont)
   | Cond (x, cont1, cont2) ->
       Cond (x, filter_cont blocks st cont1, filter_cont blocks st cont2)
-  | Switch (x, a1, a2) ->
-      Switch
-        ( x
-        , Array.map a1 ~f:(fun cont -> filter_cont blocks st cont)
-        , Array.map a2 ~f:(fun cont -> filter_cont blocks st cont) )
-  | Pushtrap (cont1, x, cont2, pcs) ->
-      Pushtrap
-        ( filter_cont blocks st cont1
-        , x
-        , filter_cont blocks st cont2
-        , Addr.Set.inter pcs st.reachable_blocks )
-  | Poptrap (cont, addr) -> Poptrap (filter_cont blocks st cont, addr)
+  | Switch (x, a1) -> Switch (x, Array.map a1 ~f:(fun cont -> filter_cont blocks st cont))
+  | Pushtrap (cont1, x, cont2) ->
+      Pushtrap (filter_cont blocks st cont1, x, filter_cont blocks st cont2)
+  | Poptrap cont -> Poptrap (filter_cont blocks st cont)
 
 (****)
 
@@ -163,23 +173,18 @@ let annot st pc xi =
 
 (****)
 
-let add_def defs x i =
-  let idx = Var.idx x in
-  defs.(idx) <- i :: defs.(idx)
-
 let rec add_arg_dep defs params args =
   match params, args with
   | x :: params, y :: args ->
       add_def defs x (Var y);
       add_arg_dep defs params args
-  | _ -> ()
+  | [], [] -> ()
+  | _ -> assert false
 
 let add_cont_dep blocks defs (pc, args) =
   match try Some (Addr.Map.find pc blocks) with Not_found -> None with
   | Some block -> add_arg_dep defs block.params args
-  | None -> ()
-
-(* Dead continuation *)
+  | None -> () (* Dead continuation *)
 
 let f ({ blocks; _ } as p : Code.program) =
   let t = Timer.make () in
@@ -192,19 +197,20 @@ let f ({ blocks; _ } as p : Code.program) =
       List.iter block.body ~f:(fun i ->
           match i with
           | Let (x, e) -> add_def defs x (Expr e)
-          | Set_field (_, _, _) | Array_set (_, _, _) | Offset_ref (_, _) -> ());
-      Option.iter block.handler ~f:(fun (_, cont) -> add_cont_dep blocks defs cont);
+          | Assign (x, y) -> add_def defs x (Var y)
+          | Event _ | Set_field (_, _, _, _) | Array_set (_, _, _) | Offset_ref (_, _) ->
+              ());
       match block.branch with
       | Return _ | Raise _ | Stop -> ()
       | Branch cont -> add_cont_dep blocks defs cont
       | Cond (_, cont1, cont2) ->
           add_cont_dep blocks defs cont1;
           add_cont_dep blocks defs cont2
-      | Switch (_, a1, a2) ->
-          Array.iter a1 ~f:(fun cont -> add_cont_dep blocks defs cont);
-          Array.iter a2 ~f:(fun cont -> add_cont_dep blocks defs cont)
-      | Pushtrap (cont, _, _, _) -> add_cont_dep blocks defs cont
-      | Poptrap (cont, _) -> add_cont_dep blocks defs cont)
+      | Switch (_, a1) -> Array.iter a1 ~f:(fun cont -> add_cont_dep blocks defs cont)
+      | Pushtrap (cont, _, cont_h) ->
+          add_cont_dep blocks defs cont_h;
+          add_cont_dep blocks defs cont
+      | Poptrap cont -> add_cont_dep blocks defs cont)
     blocks;
   let st = { live; defs; blocks; reachable_blocks = Addr.Set.empty; pure_funs } in
   mark_reachable st p.start;
@@ -219,13 +225,17 @@ let f ({ blocks; _ } as p : Code.program) =
           Addr.Map.add
             pc
             { params = List.filter block.params ~f:(fun x -> st.live.(Var.idx x) > 0)
-            ; handler =
-                Option.map block.handler ~f:(fun (x, cont) ->
-                    x, filter_cont all_blocks st cont)
             ; body =
-                List.map
-                  (List.filter block.body ~f:(fun i -> live_instr st i))
-                  ~f:(fun i -> filter_closure all_blocks st i)
+                List.fold_left block.body ~init:[] ~f:(fun acc i ->
+                    match i, acc with
+                    | Event _, Event _ :: prev ->
+                        (* Avoid consecutive events (keep just the last one) *)
+                        i :: prev
+                    | _ ->
+                        if live_instr st i
+                        then filter_closure all_blocks st i :: acc
+                        else acc)
+                |> List.rev
             ; branch = filter_live_last all_blocks st block.branch
             }
             blocks)

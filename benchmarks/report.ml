@@ -27,7 +27,7 @@ let nreference = ref (-1)
 
 let maximum = ref (-1.)
 
-let gnuplot = ref true
+let minimum = ref 0.
 
 let table = ref false
 
@@ -157,6 +157,13 @@ let stats (h, t) =
     | None -> ()
   done
 
+let escape_name_for_gnuplot s =
+  let b = Buffer.create (String.length s) in
+  String.iter s ~f:(function
+      | '_' -> Buffer.add_string b {|\\\_|}
+      | c -> Buffer.add_char b c);
+  Buffer.contents b
+
 let text_output _no_header (h, t) =
   Format.printf "-";
   List.iter h ~f:(fun v ->
@@ -181,9 +188,9 @@ let gnuplot_output ch no_header (h, t) =
       Printf.fprintf
         ch
         "set terminal svg size %d %d font 'Arial,%d'\n"
-        !svgfontsize
         !svgwidth
-        !svgheight;
+        !svgheight
+        !svgfontsize;
     if !edgecaption
     then Printf.fprintf ch "set key tmargin horizontal Left left reverse\n";
     Printf.fprintf
@@ -196,7 +203,7 @@ let gnuplot_output ch no_header (h, t) =
       (if !errors then " lw 1" else "");
     if !ylabel <> "" then Printf.fprintf ch "set ylabel \"%s\"\n" !ylabel;
     if !maximum > 0.
-    then Printf.fprintf ch "set yrange [0:%f]\n" !maximum
+    then Printf.fprintf ch "set yrange [%f:%f]\n" !minimum !maximum
     else Printf.fprintf ch "set yrange [0:]\n");
   (* labels *)
   for i = 0 to n - 1 do
@@ -210,7 +217,7 @@ let gnuplot_output ch no_header (h, t) =
             "set label font \",5\" \"%.2f\" at %f,%f center\n"
             v
             (!nn +. (float i /. float n) -. 0.5) (* why? *)
-            ((!maximum *. 1.04) +. 0.1);
+            ((!maximum *. 1.04) +. 0.01);
         nn := !nn +. 1.)
   done;
   Printf.fprintf ch "plot";
@@ -236,10 +243,15 @@ let gnuplot_output ch no_header (h, t) =
       | Some (nm, _) -> nm
       | None -> ""
     in
-    Printf.fprintf ch "- - \"%s\"\n" nm;
+    Printf.fprintf ch "- \"%s\"\n" (escape_name_for_gnuplot nm);
     List.iter t ~f:(fun (nm, l) ->
         let v, ii = List.nth l i in
-        Printf.fprintf ch "\"%s\" %f %f\n" nm v (if ii <> ii then 0. else ii));
+        Printf.fprintf
+          ch
+          "\"%s\" %f %f\n"
+          (escape_name_for_gnuplot nm)
+          v
+          (if ii <> ii then 0. else ii));
     Printf.fprintf ch "e\n"
   done
 
@@ -350,6 +362,7 @@ let _ =
   let options =
     [ "-ref", Arg.Set_int nreference, "<col> use column <col> as the baseline"
     ; "-max", Arg.Set_float maximum, "<m> truncate graph at level <max>"
+    ; "-min", Arg.Set_float minimum, "<m> truncate graph below level <min>"
     ; "-table", Arg.Set table, " output a text table"
     ; ( "-omit"
       , Arg.String (fun s -> omitted := split_on_char s ~sep:',' @ !omitted)

@@ -24,28 +24,47 @@ let%expect_test "static eval of string get" =
     let open Js_of_ocaml_compiler in
     let traverse = new Js_traverse.free in
     let _ = traverse#program [ st ] in
-    Stdlib.StringSet.mem "jsoo_exports" traverse#get_use_name
-    || Stdlib.StringSet.mem "jsoo_exports" traverse#get_def_name
+    let jsoo_exports =
+      Javascript.ident (Stdlib.Utf8_string.of_string_exn "jsoo_exports")
+    in
+    Javascript.IdentSet.mem jsoo_exports traverse#get_use
+    || Javascript.IdentSet.mem jsoo_exports traverse#get_def
   in
   let clean program =
-    let clean_statement st =
+    let rec clean_statement st =
       let open Js_of_ocaml_compiler.Javascript in
       match st with
-      | Function_declaration (name, param, body, loc1), loc2 ->
-          let body = List.filter use_jsoo_exports body in
-          Function_declaration (name, param, body, loc1), loc2
-      | ( Statement (Expression_statement (ECall (EFun (name, param, body, loc1), a, l)))
-        , loc ) ->
-          let body = List.filter use_jsoo_exports body in
-          ( Statement (Expression_statement (ECall (EFun (name, param, body, loc1), a, l)))
-          , loc )
-      | Statement _, _ -> st
+      | Function_declaration (name, (k, param, body, loc1)), loc2 -> (
+          match List.filter use_jsoo_exports body with
+          | [] -> None
+          | body ->
+              let body = List.filter_map clean_statement body in
+              Some (Function_declaration (name, (k, param, body, loc1)), loc2))
+      | ( Expression_statement (ECall (EFun (name, (k, param, body, loc1)), ANormal, a, l))
+        , loc ) -> (
+          match List.filter use_jsoo_exports body with
+          | [] -> None
+          | body ->
+              let body = List.filter_map clean_statement body in
+              Some
+                ( Expression_statement
+                    (ECall (EFun (name, (k, param, body, loc1)), ANormal, a, l))
+                , loc ))
+      | _, _ -> Some st
     in
-    List.map clean_statement program
+    List.filter_map clean_statement program
   in
   let program =
     compile_and_parse_whole_program
-      ~flags:[ "--wrap-with-fun"; "Loader"; "--target-env"; "browser"; "--no-extern-fs" ]
+      ~flags:
+        [ "--wrap-with-fun"
+        ; "Loader"
+        ; "--target-env"
+        ; "browser"
+        ; "--no-extern-fs"
+        ; "--enable"
+        ; "vardecl"
+        ]
       {|
       external pure_js_expr : string -> 'a = "caml_pure_js_expr"
       external set : 'a -> 'b -> 'c -> unit = "caml_js_set"
@@ -55,12 +74,24 @@ let%expect_test "static eval of string get" =
   print_program (clean program);
   [%expect
     {|
-    function Loader(globalThis)
-     {var jsoo_exports={};jsoo_exports["x"] = 3;return jsoo_exports}
-    if(typeof module === "object" && module.exports)module["exports"] = Loader; |}];
+    function Loader(globalThis){
+     var jsoo_exports = {};
+     jsoo_exports["x"] = 3;
+     return jsoo_exports;
+    }
+    if(typeof module === "object" && module.exports) module["exports"] = Loader;
+    //end |}];
   let program =
     compile_and_parse_whole_program
-      ~flags:[ "--wrap-with-fun"; "Loader"; "--target-env"; "browser"; "--no-extern-fs" ]
+      ~flags:
+        [ "--wrap-with-fun"
+        ; "Loader"
+        ; "--target-env"
+        ; "browser"
+        ; "--no-extern-fs"
+        ; "--enable"
+        ; "vardecl"
+        ]
       {|
       external pure_js_expr : string -> 'a = "caml_pure_js_expr"
       external set : 'a -> 'b -> 'c -> unit = "caml_js_set"
@@ -70,11 +101,12 @@ let%expect_test "static eval of string get" =
   print_program (clean program);
   [%expect
     {|
-    function Loader(globalThis){var jsoo_exports={};return jsoo_exports}
-    if(typeof module === "object" && module.exports)module["exports"] = Loader; |}];
+    function Loader(globalThis){var jsoo_exports = {}; return jsoo_exports;}
+    if(typeof module === "object" && module.exports) module["exports"] = Loader;
+    //end |}];
   let program =
     compile_and_parse_whole_program
-      ~flags:[ "--target-env"; "browser"; "--no-extern-fs" ]
+      ~flags:[ "--target-env"; "browser"; "--no-extern-fs"; "--enable"; "vardecl" ]
       {|
       external pure_js_expr : string -> 'a = "caml_pure_js_expr"
       external set : 'a -> 'b -> 'c -> unit = "caml_js_set"
@@ -84,16 +116,16 @@ let%expect_test "static eval of string get" =
   print_program (clean program);
   [%expect
     {|
-    (function(Object){}(Object));
-    (function(globalThis)
-       {var
-         jsoo_exports=
-          typeof module === "object" && module.exports || globalThis;
-        jsoo_exports["x"] = 3}
-      (globalThis)); |}];
+    (function(globalThis){
+       var
+        jsoo_exports = typeof module === "object" && module.exports || globalThis;
+       jsoo_exports["x"] = 3;
+      }
+      (globalThis));
+    //end |}];
   let program =
     compile_and_parse_whole_program
-      ~flags:[ "--target-env"; "browser"; "--no-extern-fs" ]
+      ~flags:[ "--target-env"; "browser"; "--no-extern-fs"; "--enable"; "vardecl" ]
       {|
       external pure_js_expr : string -> 'a = "caml_pure_js_expr"
       external set : 'a -> 'b -> 'c -> unit = "caml_js_set"
@@ -102,4 +134,4 @@ let%expect_test "static eval of string get" =
   in
   print_program (clean program);
   [%expect {|
-    (function(Object){}(Object));(function(globalThis){}(globalThis)); |}]
+    //end |}]

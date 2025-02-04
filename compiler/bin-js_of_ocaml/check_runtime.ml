@@ -43,6 +43,8 @@ let print_groups output l =
               output_string output (Printf.sprintf "%s\n" name)))
 
 let f (runtime_files, bytecode, target_env) =
+  Config.set_target `JavaScript;
+  Linker.reset ();
   let runtime_files, builtin =
     List.partition_map runtime_files ~f:(fun name ->
         match Builtins.find name with
@@ -87,7 +89,7 @@ let f (runtime_files, bytecode, target_env) =
       needed
   in
   let needed = StringSet.of_list (List.map ~f:fst needed) in
-  let from_runtime1 = Linker.get_provided () in
+  let from_runtime1 = Linker.list_all () in
   let from_runtime2 = Primitive.get_external () in
   (* [from_runtime2] is a superset of [from_runtime1].
      Extra primitives are registered on the ocaml side (e.g. generate.ml) *)
@@ -99,11 +101,11 @@ let f (runtime_files, bytecode, target_env) =
     StringSet.of_list (Linker.all state), missing
   in
   assert (StringSet.equal missing missing');
+  let extra = StringSet.diff from_runtime1 all_used |> StringSet.elements in
   let extra =
-    StringSet.diff from_runtime1 all_used
-    |> StringSet.elements
+    extra
     |> List.map ~f:(fun name ->
-           ( name
+           ( (name ^ if Linker.deprecated ~name then " (deprecated)" else "")
            , match Linker.origin ~name with
              | None -> []
              | Some x -> [ x ] ))

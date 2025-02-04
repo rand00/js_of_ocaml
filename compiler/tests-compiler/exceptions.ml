@@ -32,18 +32,27 @@ let prevent_inline = some_name
   print_fun_decl (program ~debug:true) None;
   [%expect
     {|
-    function some_name(param)
-     {try
-       {try {throw Stdlib[8]}catch(x){x = caml_wrap_exception(x);var i=x}}
-      catch(i$0){i$0 = caml_wrap_exception(i$0);var i=i$0}
-      throw i} |}];
+    function some_name(param){
+     try{
+      try{throw caml_maybe_attach_backtrace(Stdlib[8], 1);}
+      catch(x$0){var x = caml_wrap_exception(x$0), i$0 = x;}
+     }
+     catch(i$1){var i = caml_wrap_exception(i$1), i$0 = i;}
+     throw caml_maybe_attach_backtrace(i$0, 1);
+    }
+    //end |}];
   print_fun_decl (program ~debug:false) None;
   [%expect
     {|
-    function _a_(_b_)
-     {try
-       {try
-         {throw Stdlib[8]}
-        catch(_e_){_e_ = caml_wrap_exception(_e_);var _c_=_e_}}
-      catch(_d_){_d_ = caml_wrap_exception(_d_);throw _d_}
-      throw _c_} |}]
+    function _a_(_b_){
+     try{
+      try{throw caml_maybe_attach_backtrace(Stdlib[8], 1);}
+      catch(_f_){var _d_ = caml_wrap_exception(_f_);}
+     }
+     catch(_e_){
+      var _c_ = caml_wrap_exception(_e_);
+      throw caml_maybe_attach_backtrace(_c_, 1);
+     }
+     throw caml_maybe_attach_backtrace(_d_, 1);
+    }
+    //end |}]

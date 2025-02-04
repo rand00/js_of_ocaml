@@ -304,25 +304,17 @@ module Current = struct
 
   let arguments =
     decode_arguments_js_string
-      (if l##.search##charAt 0 == Js.string "?"
-      then l##.search##slice_end 1
-      else l##.search)
+      (if Js.equals (l##.search##charAt 0) (Js.string "?")
+       then l##.search##slice_end 1
+       else l##.search)
 
   let get_fragment () =
-    (* location.hash doesn't have the same behavior depending on the browser
-       Firefox bug : https://bugzilla.mozilla.org/show_bug.cgi?id=483304 *)
-    (* let s = Js.to_bytestring (l##hash) in *)
-    (* if String.length s > 0 && s.[0] = '#' *)
-    (* then String.sub s 1 (String.length s - 1) *)
-    (* else s; *)
-    Js.Opt.case
-      (l##.href##_match (new%js Js.regExp (Js.string "#(.*)")))
-      (fun () -> "")
-      (fun res ->
-        let res = Js.match_result res in
-        Js.to_string (Js.Unsafe.get res 1))
+    let s = Js.to_bytestring l##.hash in
+    if String.length s > 0 && Char.equal s.[0] '#'
+    then String.sub s 1 (String.length s - 1)
+    else s
 
-  let set_fragment s = l##.hash := Js.bytestring (urlencode s)
+  let set_fragment s = l##.hash := Js.bytestring s
 
   let get () = url_of_js_string l##.href
 

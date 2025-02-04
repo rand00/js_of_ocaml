@@ -23,9 +23,13 @@ open Stdlib
 module Debug : sig
   type t
 
-  val create : toplevel:bool -> bool -> t
+  type position =
+    | Before
+    | After
 
-  val find_loc : t -> ?after:bool -> int -> Parse_info.t option
+  val create : include_cmis:bool -> bool -> t
+
+  val find_loc : t -> position:position -> Code.Addr.t -> Parse_info.t option
 
   val is_empty : t -> bool
 
@@ -48,16 +52,17 @@ val read_primitives : Toc.t -> in_channel -> string list
 
 val from_exe :
      ?includes:string list
-  -> ?toplevel:bool
+  -> linkall:bool
+  -> link_info:bool
+  -> include_cmis:bool
   -> ?exported_unit:string list
-  -> ?dynlink:bool
   -> ?debug:bool
   -> in_channel
   -> one
 
 val from_cmo :
      ?includes:string list
-  -> ?toplevel:bool
+  -> ?include_cmis:bool
   -> ?debug:bool
   -> Cmo_format.compilation_unit
   -> in_channel
@@ -65,7 +70,7 @@ val from_cmo :
 
 val from_cma :
      ?includes:string list
-  -> ?toplevel:bool
+  -> ?include_cmis:bool
   -> ?debug:bool
   -> Cmo_format.library
   -> in_channel
@@ -75,6 +80,16 @@ val from_channel :
      in_channel
   -> [ `Cmo of Cmo_format.compilation_unit | `Cma of Cmo_format.library | `Exe ]
 
-val from_string : string array -> string -> Code.program * Debug.t
+val from_string :
+     prims:string array
+  -> debug:Instruct.debug_event list array
+  -> string
+  -> Code.program * Debug.t
 
-val predefined_exceptions : unit -> Code.program
+val predefined_exceptions : unit -> Code.program * Unit_info.t
+
+val link_info :
+     symbols:Ocaml_compiler.Symtable.GlobalMap.t
+  -> primitives:StringSet.t
+  -> crcs:(string * Digest.t option) list
+  -> Code.program

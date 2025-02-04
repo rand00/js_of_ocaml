@@ -34,6 +34,14 @@ module Flag = struct
     in
     fun () -> !state
 
+  let find s =
+    try !(List.assoc s !optims)
+    with Not_found -> failwith (Printf.sprintf "The option named %S doesn't exist" s)
+
+  let set s b =
+    try List.assoc s !optims := b
+    with Not_found -> failwith (Printf.sprintf "The option named %S doesn't exist" s)
+
   let disable s =
     try List.assoc s !optims := false
     with Not_found -> failwith (Printf.sprintf "The option named %S doesn't exist" s)
@@ -50,6 +58,8 @@ module Flag = struct
 
   let deadcode = o ~name:"deadcode" ~default:true
 
+  let globaldeadcode = o ~name:"globaldeadcode" ~default:true
+
   let shortvar = o ~name:"shortvar" ~default:true
 
   let compact = o ~name:"compact" ~default:true
@@ -57,6 +67,8 @@ module Flag = struct
   let optcall = o ~name:"optcall" ~default:true
 
   let inline = o ~name:"inline" ~default:true
+
+  let effects = o ~name:"effects" ~default:false
 
   let staticeval = o ~name:"staticeval" ~default:true
 
@@ -72,19 +84,23 @@ module Flag = struct
 
   let improved_stacktrace = o ~name:"with-js-error" ~default:false
 
-  let include_cmis = o ~name:"withcmi" ~default:true
-
   let warn_unused = o ~name:"warn-unused" ~default:false
 
   let inline_callgen = o ~name:"callgen" ~default:false
 
   let safe_string = o ~name:"safestring" ~default:true
 
-  let use_js_string = o ~name:"use-js-string" ~default:false
+  let use_js_string = o ~name:"use-js-string" ~default:true
 
   let check_magic = o ~name:"check-magic-number" ~default:true
 
   let compact_vardecl = o ~name:"vardecl" ~default:false
+
+  let header = o ~name:"header" ~default:true
+
+  let auto_link = o ~name:"auto-link" ~default:true
+
+  let es6 = o ~name:"es6" ~default:false
 end
 
 module Param = struct
@@ -148,5 +164,34 @@ module Param = struct
     p
       ~name:"tc"
       ~desc:"Set tailcall optimisation"
-      (enum [ "trampoline", TcTrampoline; (* default *) "none", TcNone ])
+      (enum [ "trampoline", TcTrampoline (* default *); "none", TcNone ])
+
+  let lambda_lifting_threshold =
+    (* When we reach this depth, we start looking for functions to be lifted *)
+    p
+      ~name:"lifting-threshold"
+      ~desc:"Set threshold for lifting deeply nested functions"
+      (int 50)
+
+  let lambda_lifting_baseline =
+    (* Level at which functions are lifted *)
+    p
+      ~name:"lifting-baseline"
+      ~desc:"Set baseline for lifting deeply nested functions"
+      (int 1)
 end
+
+(****)
+
+let target_ : [ `JavaScript | `Wasm | `None ] ref = ref `None
+
+let target () =
+  match !target_ with
+  | `None -> failwith "target was not set"
+  | (`JavaScript | `Wasm) as t -> t
+
+let set_target (t : [ `JavaScript | `Wasm ]) =
+  (match t with
+  | `JavaScript -> Targetint.set_num_bits 32
+  | `Wasm -> Targetint.set_num_bits 31);
+  target_ := (t :> [ `JavaScript | `Wasm | `None ])

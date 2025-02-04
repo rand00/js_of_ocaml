@@ -22,16 +22,26 @@ open Js_of_ocaml_compiler
 open Cmdliner
 
 type t =
-  { source_map : (string option * Source_map.t) option
+  { common : Jsoo_cmdline.Arg.t
+  ; source_map : (string option * Source_map.Standard.t) option
   ; js_files : string list
   ; output_file : string option
   ; resolve_sourcemap_url : bool
+  ; linkall : bool
+  ; mklib : bool
+  ; toplevel : bool
   }
 
 let options =
   let output_file =
     let doc = "Set output file name to [$(docv)]." in
     Arg.(value & opt (some string) None & info [ "o" ] ~docv:"FILE" ~doc)
+  in
+  let no_sourcemap =
+    let doc =
+      "Don't generate source map. All other source map related flags will be ignored."
+    in
+    Arg.(value & flag & info [ "no-sourcemap"; "no-source-map" ] ~doc)
   in
   let sourcemap =
     let doc = "Generate source map." in
@@ -53,57 +63,106 @@ let options =
     let doc = "Link JavaScript files [$(docv)]." in
     Arg.(value & pos_all string [] & info [] ~docv:"JS_FILES" ~doc)
   in
+  let linkall =
+    let doc = "Link all compilation units." in
+    Arg.(value & flag & info [ "linkall" ] ~doc)
+  in
+  let mklib =
+    let doc =
+      "Build a library (.cma.js file) with the js files (.cmo.js files) given on the \
+       command line. Similar to ocamlc -a."
+    in
+    Arg.(value & flag & info [ "a" ] ~doc)
+  in
+  let toplevel =
+    let doc = "Compile a toplevel." in
+    Arg.(value & flag & info [ "toplevel" ] ~doc)
+  in
   let build_t
+      common
+      no_sourcemap
       sourcemap
       sourcemap_inline_in_js
       sourcemap_root
       output_file
       resolve_sourcemap_url
-      js_files =
+      js_files
+      linkall
+      mklib
+      toplevel =
     let chop_extension s = try Filename.chop_extension s with Invalid_argument _ -> s in
     let source_map =
-      if sourcemap || sourcemap_inline_in_js
+      if (not no_sourcemap) && (sourcemap || sourcemap_inline_in_js)
       then
         let file, sm_output_file =
           match output_file with
-          | Some file when sourcemap_inline_in_js -> file, None
-          | Some file -> file, Some (chop_extension file ^ ".map")
-          | None -> "STDIN", None
+          | Some file when sourcemap_inline_in_js -> Some file, None
+          | Some file -> Some file, Some (chop_extension file ^ ".map")
+          | None -> None, None
         in
         Some
           ( sm_output_file
-          , { Source_map.version = 3
-            ; file
+          , { (Source_map.Standard.empty ~inline_source_content:true) with
+              file
             ; sourceroot = sourcemap_root
-            ; sources = []
-            ; sources_content = Some []
-            ; names = []
-            ; mappings = []
             } )
       else None
     in
-    `Ok { output_file; js_files; source_map; resolve_sourcemap_url }
+    `Ok
+      { common
+      ; output_file
+      ; js_files
+      ; source_map
+      ; resolve_sourcemap_url
+      ; linkall
+      ; mklib
+      ; toplevel
+      }
   in
   let t =
     Term.(
       const build_t
+      $ Lazy.force Jsoo_cmdline.Arg.t
+      $ no_sourcemap
       $ sourcemap
       $ sourcemap_inline_in_js
       $ sourcemap_root
       $ output_file
       $ resolve_sourcemap_url
-      $ js_files)
+      $ js_files
+      $ linkall
+      $ mklib
+      $ toplevel)
   in
   Term.ret t
 
-let f { output_file; source_map; resolve_sourcemap_url; js_files } =
+let f
+    { common
+    ; output_file
+    ; source_map
+    ; resolve_sourcemap_url
+    ; js_files
+    ; linkall
+    ; mklib
+    ; toplevel
+    } =
+  Config.set_target `JavaScript;
+  Jsoo_cmdline.Arg.eval common;
+  Linker.reset ();
   let with_output f =
     match output_file with
     | None -> f stdout
     | Some file -> Filename.gen_file file f
   in
   with_output (fun output ->
-      Link_js.link ~output ~files:js_files ~source_map ~resolve_sourcemap_url)
+      Link_js.link
+        ~output
+        ~linkall
+        ~mklib
+        ~toplevel
+        ~files:js_files
+        ~source_map
+        ~resolve_sourcemap_url)
 
 let info =
   Info.make

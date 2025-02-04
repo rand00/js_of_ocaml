@@ -30,6 +30,8 @@ module Fragment : sig
   val parse_string : string -> t list
 
   val parse_builtin : Builtins.File.t -> t list
+
+  val pack : t -> t
 end
 
 val reset : unit -> unit
@@ -53,14 +55,18 @@ type output =
   ; always_required_codes : always_required list
   }
 
-val init : unit -> state
+val list_all : ?from:string list -> unit -> StringSet.t
 
-val resolve_deps : ?linkall:bool -> state -> StringSet.t -> state * StringSet.t
+val init : ?from:string list -> unit -> state
 
-val link : Javascript.program -> state -> output
+val resolve_deps : ?check_missing:bool -> state -> StringSet.t -> state * StringSet.t
 
-val get_provided : unit -> StringSet.t
+val link : ?check_missing:bool -> Javascript.program -> state -> output
 
 val all : state -> string list
 
+val missing : state -> string list
+
 val origin : name:string -> string option
+
+val deprecated : name:string -> bool

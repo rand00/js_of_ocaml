@@ -17,80 +17,34 @@
  * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
  *)
 
-open Js_of_ocaml
 open Js_of_ocaml_compiler
 open Js_of_ocaml_compiler.Stdlib
-
-let split_primitives p =
-  let len = String.length p in
-  let rec split beg cur =
-    if cur >= len
-    then []
-    else if Char.equal p.[cur] '\000'
-    then String.sub p ~pos:beg ~len:(cur - beg) :: split (cur + 1) (cur + 1)
-    else split beg (cur + 1)
-  in
-  Array.of_list (split 0 0)
-
-let new_directive name k = Hashtbl.add Toploop.directive_table name k
-  [@@alert "-deprecated"]
 
 let setup =
   lazy
     (Topdirs.dir_directory "/static/cmis";
-     new_directive "enable" (Toploop.Directive_string Config.Flag.enable);
-     new_directive "disable" (Toploop.Directive_string Config.Flag.disable);
-     new_directive "debug_on" (Toploop.Directive_string Debug.enable);
-     new_directive "debug_off" (Toploop.Directive_string Debug.disable);
-     new_directive "tailcall" (Toploop.Directive_string (Config.Param.set "tc"));
-     let initial_primitive_count =
-       Array.length (split_primitives (Symtable.data_primitive_names ()))
-     in
-     (* this needs to stay synchronized with toplevel.js *)
-     let compile (s : bytes array) =
-       let s = String.concat ~sep:"" (List.map ~f:Bytes.to_string (Array.to_list s)) in
-       let prims = split_primitives (Symtable.data_primitive_names ()) in
-       let unbound_primitive p =
-         try
-           ignore (Js.Unsafe.eval_string p);
-           false
-         with _ -> true
-       in
-       let stubs = ref [] in
-       Array.iteri prims ~f:(fun i p ->
-           if i >= initial_primitive_count && unbound_primitive p
-           then
-             stubs :=
-               Format.sprintf "function %s(){caml_failwith(\"%s not implemented\")}" p p
-               :: !stubs);
-       let output_program = Driver.from_string prims s in
-       let b = Buffer.create 100 in
-       output_program (Pretty_print.to_buffer b);
-       Format.(pp_print_flush std_formatter ());
-       Format.(pp_print_flush err_formatter ());
-       flush stdout;
-       flush stderr;
-       let res = Buffer.contents b in
-       let res = String.concat ~sep:"" !stubs ^ res in
-       let res : unit -> _ = Js.Unsafe.global##toplevelEval (res : string) in
-       res
-     in
-     Js.Unsafe.global##.toplevelCompile := compile (*XXX HACK!*);
-     (Js.Unsafe.global##.toplevelEval
-     := fun (x : string) ->
-     let f : < .. > Js.t -> < .. > Js.t = Js.Unsafe.eval_string x in
-     fun () ->
-       let res = f Js.Unsafe.global in
-       Format.(pp_print_flush std_formatter ());
-       Format.(pp_print_flush err_formatter ());
-       flush stdout;
-       flush stderr;
-       res);
-     Js.Unsafe.global##.toplevelReloc
-     := Js.Unsafe.callback (fun name ->
-            let name = Js.to_string name in
-            Js_of_ocaml_compiler.Ocaml_compiler.Symtable.reloc_ident name);
-     ())
+     Toploop.add_directive
+       "enable"
+       (Toploop.Directive_string Config.Flag.enable)
+       { section = "js_of_ocaml"; doc = "Enable the given flag" };
+     Toploop.add_directive
+       "disable"
+       (Toploop.Directive_string Config.Flag.disable)
+       { section = "js_of_ocaml"; doc = "Disable the given flag" };
+     Toploop.add_directive
+       "debug_on"
+       (Toploop.Directive_string Debug.enable)
+       { section = "js_of_ocaml"; doc = "Enable debug for the given section" };
+     Toploop.add_directive
+       "debug_off"
+       (Toploop.Directive_string Debug.disable)
+       { section = "js_of_ocaml"; doc = "Disable debug for the given section" };
+     Toploop.add_directive
+       "tailcall"
+       (Toploop.Directive_string (Config.Param.set "tc"))
+       { section = "js_of_ocaml"
+       ; doc = "Set the depth of tail calls before going through a trampoline"
+       })
 
 let refill_lexbuf s p ppf buffer len =
   if !p = String.length s
@@ -111,17 +65,23 @@ let refill_lexbuf s p ppf buffer len =
     p := !p + len'';
     len''
 
-let toploop_use_silently ffp name = Toploop.use_silently ffp name
-  [@@ocaml.warning "-32"] [@@if ocaml_version < (4, 14, 0)]
-
-let toploop_use_silently ffp name = Toploop.use_silently ffp (File name)
-  [@@ocaml.warning "-32"] [@@if ocaml_version >= (4, 14, 0)]
-
 let use ffp content =
-  let name = "/dev/fake_stdin" in
-  if Sys.file_exists name then Sys.remove name;
-  Sys_js.create_file ~name ~content;
-  toploop_use_silently ffp name
+  let fname, oc =
+    Filename.open_temp_file ~mode:[ Open_binary ] "jsoo_toplevel" "fake_stdin"
+  in
+  output_string oc content;
+  close_out oc;
+  try
+    let b = Toploop.use_silently ffp fname in
+    Sys.remove fname;
+    b
+  with e ->
+    Sys.remove fname;
+    raise e
+[@@if ocaml_version < (4, 14, 0)]
+
+let use ffp content = Toploop.use_silently ffp (String content)
+[@@if ocaml_version >= (4, 14, 0)]
 
 let execute printval ?pp_code ?highlight_location pp_answer s =
   let lb = Lexing.from_function (refill_lexbuf s (ref 0) pp_code) in

@@ -81,6 +81,12 @@ module type OPT = sig
 
   val to_option : 'a t -> 'a option
   (** Convert to option type. *)
+
+  external equals : _ t -> _ t -> bool = "caml_js_equals"
+  (** Javascript [==] equality operator. *)
+
+  external strict_equals : _ t -> _ t -> bool = "caml_js_strict_equals"
+  (** Javascript [===] equality operator. *)
 end
 
 module Opt : OPT with type 'a t = 'a opt
@@ -137,7 +143,7 @@ type +'a constr
 (** A value of type [(t1 -> ... -> tn -> t Js.t) Js.constr] is a
       Javascript constructor expecting {i n} arguments of types [t1]
       to [tn] and returning a Javascript object of type [t Js.t].  Use
-      the syntax extension [new%js c (e1, ..., en)] to build an object
+      the syntax extension [new%js c e1 ... en] to build an object
       using constructor [c] and arguments [e1] to [en]. *)
 
 (** {2 Callbacks to OCaml} *)
@@ -168,6 +174,14 @@ external wrap_meth_callback : ('b -> 'a) -> ('b, 'a) meth_callback
       Javascript.  The first parameter of the function will be bound
       to the value of the [this] implicit parameter. *)
 
+(** {2 Javascript comparisons} *)
+
+external equals : _ t -> _ t -> bool = "caml_js_equals"
+(** Javascript [==] equality operator. *)
+
+external strict_equals : _ t -> _ t -> bool = "caml_js_strict_equals"
+(** Javascript [===] equality operator. *)
+
 (** {2 Javascript standard objects} *)
 
 val _true : bool t
@@ -188,202 +202,236 @@ type string_array
       (This type is used to resolved the mutual dependency between
        string and array type definitions.) *)
 
+type normalization
+(** Opaque type for Unicode normalization forms. *)
+
+val nfd : normalization t
+(** Canonical Decomposition *)
+
+val nfc : normalization t
+(** Canonical Decomposition, followed by Canonical Composition *)
+
+val nfkd : normalization t
+(** Compatibility Decomposition *)
+
+val nfkc : normalization t
+(** Compatibility Decomposition, followed by Canonical Composition *)
+
+(** Specification of Javascript number objects. *)
+
+type number_t = float
+
+class type number = object
+  method toString : js_string t meth
+
+  method toString_radix : int -> js_string t meth
+
+  method toLocaleString : js_string t meth
+
+  method toFixed : int -> js_string t meth
+
+  method toExponential : js_string t meth
+
+  method toExponential_digits : int -> js_string t meth
+
+  method toPrecision : int -> js_string t meth
+end
+
 (** Specification of Javascript string objects. *)
-class type js_string =
-  object
-    method toString : js_string t meth
+and js_string = object
+  method toString : js_string t meth
 
-    method valueOf : js_string t meth
+  method valueOf : js_string t meth
 
-    method charAt : int -> js_string t meth
+  method charAt : int -> js_string t meth
 
-    method charCodeAt : int -> float meth
+  method charCodeAt : int -> number_t meth
 
-    (* This may return NaN... *)
-    method concat : js_string t -> js_string t meth
+  (* This may return NaN... *)
+  method concat : js_string t -> js_string t meth
 
-    method concat_2 : js_string t -> js_string t -> js_string t meth
+  method concat_2 : js_string t -> js_string t -> js_string t meth
 
-    method concat_3 : js_string t -> js_string t -> js_string t -> js_string t meth
+  method concat_3 : js_string t -> js_string t -> js_string t -> js_string t meth
 
-    method concat_4 :
-      js_string t -> js_string t -> js_string t -> js_string t -> js_string t meth
+  method concat_4 :
+    js_string t -> js_string t -> js_string t -> js_string t -> js_string t meth
 
-    method indexOf : js_string t -> int meth
+  method indexOf : js_string t -> int meth
 
-    method indexOf_from : js_string t -> int -> int meth
+  method indexOf_from : js_string t -> int -> int meth
 
-    method lastIndexOf : js_string t -> int meth
+  method lastIndexOf : js_string t -> int meth
 
-    method lastIndexOf_from : js_string t -> int -> int meth
+  method lastIndexOf_from : js_string t -> int -> int meth
 
-    method localeCompare : js_string t -> float meth
+  method localeCompare : js_string t -> number_t meth
 
-    method _match : regExp t -> match_result_handle t opt meth
+  method _match : regExp t -> match_result_handle t opt meth
 
-    method replace : regExp t -> js_string t -> js_string t meth
+  method normalize : js_string t meth
 
-    (* FIX: version of replace taking a function... *)
-    method replace_string : js_string t -> js_string t -> js_string t meth
+  method normalize_form : normalization t -> js_string t meth
 
-    method search : regExp t -> int meth
+  method replace : regExp t -> js_string t -> js_string t meth
 
-    method slice : int -> int -> js_string t meth
+  (* FIX: version of replace taking a function... *)
+  method replace_string : js_string t -> js_string t -> js_string t meth
 
-    method slice_end : int -> js_string t meth
+  method search : regExp t -> int meth
 
-    method split : js_string t -> string_array t meth
+  method slice : int -> int -> js_string t meth
 
-    method split_limited : js_string t -> int -> string_array t meth
+  method slice_end : int -> js_string t meth
 
-    method split_regExp : regExp t -> string_array t meth
+  method split : js_string t -> string_array t meth
 
-    method split_regExpLimited : regExp t -> int -> string_array t meth
+  method split_limited : js_string t -> int -> string_array t meth
 
-    method substring : int -> int -> js_string t meth
+  method split_regExp : regExp t -> string_array t meth
 
-    method substring_toEnd : int -> js_string t meth
+  method split_regExpLimited : regExp t -> int -> string_array t meth
 
-    method toLowerCase : js_string t meth
+  method substring : int -> int -> js_string t meth
 
-    method toLocaleLowerCase : js_string t meth
+  method substring_toEnd : int -> js_string t meth
 
-    method toUpperCase : js_string t meth
+  method toLowerCase : js_string t meth
 
-    method toLocaleUpperCase : js_string t meth
+  method toLocaleLowerCase : js_string t meth
 
-    method trim : js_string t meth
+  method toUpperCase : js_string t meth
 
-    method length : int readonly_prop
-  end
+  method toLocaleUpperCase : js_string t meth
+
+  method trim : js_string t meth
+
+  method length : int readonly_prop
+end
 
 (** Specification of Javascript regular expression objects. *)
-and regExp =
-  object
-    method exec : js_string t -> match_result_handle t opt meth
+and regExp = object
+  method exec : js_string t -> match_result_handle t opt meth
 
-    method test : js_string t -> bool t meth
+  method test : js_string t -> bool t meth
 
-    method toString : js_string t meth
+  method toString : js_string t meth
 
-    method source : js_string t readonly_prop
+  method source : js_string t readonly_prop
 
-    method global : bool t readonly_prop
+  method global : bool t readonly_prop
 
-    method ignoreCase : bool t readonly_prop
+  method ignoreCase : bool t readonly_prop
 
-    method multiline : bool t readonly_prop
+  method multiline : bool t readonly_prop
 
-    method lastIndex : int prop
-  end
+  method lastIndex : int prop
+end
 
 (** Specification of the string constructor, considered as an object. *)
-class type string_constr =
-  object
-    method fromCharCode : int -> js_string t meth
-  end
+class type string_constr = object
+  method fromCharCode : int -> js_string t meth
+end
 
 val string_constr : string_constr t
 (** The string constructor, as an object. *)
 
 val regExp : (js_string t -> regExp t) constr
-(** Constructor of [RegExp] objects.  The expression [new%js regExp (s)]
+(** Constructor of [RegExp] objects.  The expression [new%js regExp s]
       builds the regular expression specified by string [s]. *)
 
 val regExp_withFlags : (js_string t -> js_string t -> regExp t) constr
 (** Constructor of [RegExp] objects.  The expression
-      [new%js regExp (s, f)] builds the regular expression specified by
+      [new%js regExp s f] builds the regular expression specified by
       string [s] using flags [f]. *)
 
 val regExp_copy : (regExp t -> regExp t) constr
 (** Constructor of [RegExp] objects.  The expression
-      [new%js regExp (r)] builds a copy of regular expression [r]. *)
+      [new%js regExp r] builds a copy of regular expression [r]. *)
 
 (** Specification of Javascript regular arrays.
     Use [Js.array_get] and [Js.array_set] to access and set array elements. *)
-class type ['a] js_array =
-  object
-    method toString : js_string t meth
+class type ['a] js_array = object
+  method toString : js_string t meth
 
-    method toLocaleString : js_string t meth
+  method toLocaleString : js_string t meth
 
-    method concat : 'a js_array t -> 'a js_array t meth
+  method concat : 'a js_array t -> 'a js_array t meth
 
-    method join : js_string t -> js_string t meth
+  method join : js_string t -> js_string t meth
 
-    method pop : 'a optdef meth
+  method pop : 'a optdef meth
 
-    method push : 'a -> int meth
+  method push : 'a -> int meth
 
-    method push_2 : 'a -> 'a -> int meth
+  method push_2 : 'a -> 'a -> int meth
 
-    method push_3 : 'a -> 'a -> 'a -> int meth
+  method push_3 : 'a -> 'a -> 'a -> int meth
 
-    method push_4 : 'a -> 'a -> 'a -> 'a -> int meth
+  method push_4 : 'a -> 'a -> 'a -> 'a -> int meth
 
-    method reverse : 'a js_array t meth
+  method reverse : 'a js_array t meth
 
-    method shift : 'a optdef meth
+  method shift : 'a optdef meth
 
-    method slice : int -> int -> 'a js_array t meth
+  method slice : int -> int -> 'a js_array t meth
 
-    method slice_end : int -> 'a js_array t meth
+  method slice_end : int -> 'a js_array t meth
 
-    method sort : ('a -> 'a -> float) callback -> 'a js_array t meth
+  method sort : ('a -> 'a -> number_t) callback -> 'a js_array t meth
 
-    method sort_asStrings : 'a js_array t meth
+  method sort_asStrings : 'a js_array t meth
 
-    method splice : int -> int -> 'a js_array t meth
+  method splice : int -> int -> 'a js_array t meth
 
-    method splice_1 : int -> int -> 'a -> 'a js_array t meth
+  method splice_1 : int -> int -> 'a -> 'a js_array t meth
 
-    method splice_2 : int -> int -> 'a -> 'a -> 'a js_array t meth
+  method splice_2 : int -> int -> 'a -> 'a -> 'a js_array t meth
 
-    method splice_3 : int -> int -> 'a -> 'a -> 'a -> 'a js_array t meth
+  method splice_3 : int -> int -> 'a -> 'a -> 'a -> 'a js_array t meth
 
-    method splice_4 : int -> int -> 'a -> 'a -> 'a -> 'a -> 'a js_array t meth
+  method splice_4 : int -> int -> 'a -> 'a -> 'a -> 'a -> 'a js_array t meth
 
-    method unshift : 'a -> int meth
+  method unshift : 'a -> int meth
 
-    method unshift_2 : 'a -> 'a -> int meth
+  method unshift_2 : 'a -> 'a -> int meth
 
-    method unshift_3 : 'a -> 'a -> 'a -> int meth
+  method unshift_3 : 'a -> 'a -> 'a -> int meth
 
-    method unshift_4 : 'a -> 'a -> 'a -> 'a -> int meth
+  method unshift_4 : 'a -> 'a -> 'a -> 'a -> int meth
 
-    method some : ('a -> int -> 'a js_array t -> bool t) callback -> bool t meth
+  method some : ('a -> int -> 'a js_array t -> bool t) callback -> bool t meth
 
-    method every : ('a -> int -> 'a js_array t -> bool t) callback -> bool t meth
+  method every : ('a -> int -> 'a js_array t -> bool t) callback -> bool t meth
 
-    method forEach : ('a -> int -> 'a js_array t -> unit) callback -> unit meth
+  method forEach : ('a -> int -> 'a js_array t -> unit) callback -> unit meth
 
-    method map : ('a -> int -> 'a js_array t -> 'b) callback -> 'b js_array t meth
+  method map : ('a -> int -> 'a js_array t -> 'b) callback -> 'b js_array t meth
 
-    method filter : ('a -> int -> 'a js_array t -> bool t) callback -> 'a js_array t meth
+  method filter : ('a -> int -> 'a js_array t -> bool t) callback -> 'a js_array t meth
 
-    method reduce_init :
-      ('b -> 'a -> int -> 'a js_array t -> 'b) callback -> 'b -> 'b meth
+  method reduce_init : ('b -> 'a -> int -> 'a js_array t -> 'b) callback -> 'b -> 'b meth
 
-    method reduce : ('a -> 'a -> int -> 'a js_array t -> 'a) callback -> 'a meth
+  method reduce : ('a -> 'a -> int -> 'a js_array t -> 'a) callback -> 'a meth
 
-    method reduceRight_init :
-      ('b -> 'a -> int -> 'a js_array t -> 'b) callback -> 'b -> 'b meth
+  method reduceRight_init :
+    ('b -> 'a -> int -> 'a js_array t -> 'b) callback -> 'b -> 'b meth
 
-    method reduceRight : ('a -> 'a -> int -> 'a js_array t -> 'a) callback -> 'a meth
+  method reduceRight : ('a -> 'a -> int -> 'a js_array t -> 'a) callback -> 'a meth
 
-    method length : int prop
-  end
+  method length : int prop
+end
 
 val object_keys : 'a t -> js_string t js_array t
 (** Returns jsarray containing keys of the object as Object.keys does. *)
 
 val array_empty : 'a js_array t constr
 (** Constructor of [Array] objects.  The expression
-      [new%js array_empty ()] returns an empty array. *)
+      [new%js array_empty] returns an empty array. *)
 
 val array_length : (int -> 'a js_array t) constr
 (** Constructor of [Array] objects.  The expression
-      [new%js array_length (l)] returns an array of length [l]. *)
+      [new%js array_length l] returns an array of length [l]. *)
 
 val array_get : 'a #js_array t -> int -> 'a optdef
 (** Array access: [array_get a i] returns the element at index [i]
@@ -401,14 +449,13 @@ val array_mapi : (int -> 'a -> 'b) -> 'a #js_array t -> 'b #js_array t
 (** Array mapi: [array_mapi f a] is [a##map(wrap_callback (fun elt idx arr -> f idx elt))]. *)
 
 (** Specification of match result objects *)
-class type match_result =
-  object
-    inherit [js_string t] js_array
+class type match_result = object
+  inherit [js_string t] js_array
 
-    method index : int readonly_prop
+  method index : int readonly_prop
 
-    method input : js_string t readonly_prop
-  end
+  method input : js_string t readonly_prop
+end
 
 val str_array : string_array t -> js_string t js_array t
 (** Convert an opaque [string_array t] object into an array of
@@ -420,265 +467,237 @@ val match_result : match_result_handle t -> match_result t
       (Used to resolved the mutual dependency between string
       and array type definitions.) *)
 
-(** Specification of Javascript number objects. *)
-class type number =
-  object
-    method toString : js_string t meth
-
-    method toString_radix : int -> js_string t meth
-
-    method toLocaleString : js_string t meth
-
-    method toFixed : int -> js_string t meth
-
-    method toExponential : js_string t meth
-
-    method toExponential_digits : int -> js_string t meth
-
-    method toPrecision : int -> js_string t meth
-  end
-
-external number_of_float : float -> number t = "caml_js_from_float"
-(** Conversion of OCaml floats to Javascript number objects. *)
-
-external float_of_number : number t -> float = "caml_js_to_float"
-(** Conversion of Javascript number objects to OCaml floats. *)
-
 (** Specification of Javascript date objects. *)
-class type date =
-  object
-    method toString : js_string t meth
+class type date = object
+  method toString : js_string t meth
 
-    method toDateString : js_string t meth
+  method toDateString : js_string t meth
 
-    method toTimeString : js_string t meth
+  method toTimeString : js_string t meth
 
-    method toLocaleString : js_string t meth
+  method toLocaleString : js_string t meth
 
-    method toLocaleDateString : js_string t meth
+  method toLocaleDateString : js_string t meth
 
-    method toLocaleTimeString : js_string t meth
+  method toLocaleTimeString : js_string t meth
 
-    method valueOf : float meth
+  method valueOf : number_t meth
 
-    method getTime : float meth
+  method getTime : number_t meth
 
-    method getFullYear : int meth
+  method getFullYear : int meth
 
-    method getUTCFullYear : int meth
+  method getUTCFullYear : int meth
 
-    method getMonth : int meth
+  method getMonth : int meth
 
-    method getUTCMonth : int meth
+  method getUTCMonth : int meth
 
-    method getDate : int meth
+  method getDate : int meth
 
-    method getUTCDate : int meth
+  method getUTCDate : int meth
 
-    method getDay : int meth
+  method getDay : int meth
 
-    method getUTCDay : int meth
+  method getUTCDay : int meth
 
-    method getHours : int meth
+  method getHours : int meth
 
-    method getUTCHours : int meth
+  method getUTCHours : int meth
 
-    method getMinutes : int meth
+  method getMinutes : int meth
 
-    method getUTCMinutes : int meth
+  method getUTCMinutes : int meth
 
-    method getSeconds : int meth
+  method getSeconds : int meth
 
-    method getUTCSeconds : int meth
+  method getUTCSeconds : int meth
 
-    method getMilliseconds : int meth
+  method getMilliseconds : int meth
 
-    method getUTCMilliseconds : int meth
+  method getUTCMilliseconds : int meth
 
-    method getTimezoneOffset : int meth
+  method getTimezoneOffset : int meth
 
-    method setTime : float -> float meth
+  method setTime : number_t -> number_t meth
 
-    method setFullYear : int -> float meth
+  method setFullYear : int -> number_t meth
 
-    method setUTCFullYear : int -> float meth
+  method setUTCFullYear : int -> number_t meth
 
-    method setMonth : int -> float meth
+  method setMonth : int -> number_t meth
 
-    method setUTCMonth : int -> float meth
+  method setUTCMonth : int -> number_t meth
 
-    method setDate : int -> float meth
+  method setDate : int -> number_t meth
 
-    method setUTCDate : int -> float meth
+  method setUTCDate : int -> number_t meth
 
-    method setDay : int -> float meth
+  method setDay : int -> number_t meth
 
-    method setUTCDay : int -> float meth
+  method setUTCDay : int -> number_t meth
 
-    method setHours : int -> float meth
+  method setHours : int -> number_t meth
 
-    method setUTCHours : int -> float meth
+  method setUTCHours : int -> number_t meth
 
-    method setMinutes : int -> float meth
+  method setMinutes : int -> number_t meth
 
-    method setUTCMinutes : int -> float meth
+  method setUTCMinutes : int -> number_t meth
 
-    method setSeconds : int -> float meth
+  method setSeconds : int -> number_t meth
 
-    method setUTCSeconds : int -> float meth
+  method setUTCSeconds : int -> number_t meth
 
-    method setMilliseconds : int -> float meth
+  method setMilliseconds : int -> number_t meth
 
-    method setUTCMilliseconds : int -> float meth
+  method setUTCMilliseconds : int -> number_t meth
 
-    method toUTCString : js_string t meth
+  method toUTCString : js_string t meth
 
-    method toISOString : js_string t meth
+  method toISOString : js_string t meth
 
-    method toJSON : 'a -> js_string t meth
-  end
+  method toJSON : 'a -> js_string t meth
+end
 
 val date_now : date t constr
-(** Constructor of [Date] objects: [new%js date_now ()] returns a
+(** Constructor of [Date] objects: [new%js date_now] returns a
       [Date] object initialized with the current date. *)
 
-val date_fromTimeValue : (float -> date t) constr
-(** Constructor of [Date] objects: [new%js date_fromTimeValue (t)] returns a
+val date_fromTimeValue : (number_t -> date t) constr
+(** Constructor of [Date] objects: [new%js date_fromTimeValue t] returns a
       [Date] object initialized with the time value [t]. *)
 
 val date_month : (int -> int -> date t) constr
-(** Constructor of [Date] objects: [new%js date_fromTimeValue (y, m)]
+(** Constructor of [Date] objects: [new%js date_fromTimeValue y m]
       returns a [Date] object corresponding to year [y] and month [m]. *)
 
 val date_day : (int -> int -> int -> date t) constr
-(** Constructor of [Date] objects: [new%js date_fromTimeValue (y, m, d)]
+(** Constructor of [Date] objects: [new%js date_fromTimeValue y m d]
       returns a [Date] object corresponding to year [y], month [m] and
       day [d]. *)
 
 val date_hour : (int -> int -> int -> int -> date t) constr
-(** Constructor of [Date] objects: [new%js date_fromTimeValue (y, m, d, h)]
+(** Constructor of [Date] objects: [new%js date_fromTimeValue y m d h]
       returns a [Date] object corresponding to year [y] to hour [h]. *)
 
 val date_min : (int -> int -> int -> int -> int -> date t) constr
-(** Constructor of [Date] objects: [new%js date_fromTimeValue (y, m, d, h, m')]
+(** Constructor of [Date] objects: [new%js date_fromTimeValue y m d h m']
       returns a [Date] object corresponding to year [y] to minute [m']. *)
 
 val date_sec : (int -> int -> int -> int -> int -> int -> date t) constr
 (** Constructor of [Date] objects:
-      [new%js date_fromTimeValue (y, m, d, h, m', s)]
+      [new%js date_fromTimeValue y m d h m' s]
       returns a [Date] object corresponding to year [y] to second [s]. *)
 
 val date_ms : (int -> int -> int -> int -> int -> int -> int -> date t) constr
 (** Constructor of [Date] objects:
-      [new%js date_fromTimeValue (y, m, d, h, m', s, ms)]
+      [new%js date_fromTimeValue y m d h m' s ms]
       returns a [Date] object corresponding to year [y]
       to millisecond [ms]. *)
 
 (** Specification of the date constructor, considered as an object. *)
-class type date_constr =
-  object
-    method parse : js_string t -> float meth
+class type date_constr = object
+  method parse : js_string t -> number_t meth
 
-    method _UTC_month : int -> int -> float meth
+  method _UTC_month : int -> int -> number_t meth
 
-    method _UTC_day : int -> int -> float meth
+  method _UTC_day : int -> int -> number_t meth
 
-    method _UTC_hour : int -> int -> int -> int -> float meth
+  method _UTC_hour : int -> int -> int -> int -> number_t meth
 
-    method _UTC_min : int -> int -> int -> int -> int -> float meth
+  method _UTC_min : int -> int -> int -> int -> int -> number_t meth
 
-    method _UTC_sec : int -> int -> int -> int -> int -> int -> float meth
+  method _UTC_sec : int -> int -> int -> int -> int -> int -> number_t meth
 
-    method _UTC_ms : int -> int -> int -> int -> int -> int -> int -> float meth
+  method _UTC_ms : int -> int -> int -> int -> int -> int -> int -> number_t meth
 
-    method now : float meth
-  end
+  method now : number_t meth
+end
 
 val date : date_constr t
 (** The date constructor, as an object. *)
 
 (** Specification of Javascript math object. *)
-class type math =
-  object
-    method _E : float readonly_prop
+class type math = object
+  method _E : number_t readonly_prop
 
-    method _LN2 : float readonly_prop
+  method _LN2 : number_t readonly_prop
 
-    method _LN10 : float readonly_prop
+  method _LN10 : number_t readonly_prop
 
-    method _LOG2E : float readonly_prop
+  method _LOG2E : number_t readonly_prop
 
-    method _LOG10E : float readonly_prop
+  method _LOG10E : number_t readonly_prop
 
-    method _PI : float readonly_prop
+  method _PI : number_t readonly_prop
 
-    method _SQRT1_2_ : float readonly_prop
+  method _SQRT1_2_ : number_t readonly_prop
 
-    method _SQRT2 : float readonly_prop
+  method _SQRT2 : number_t readonly_prop
 
-    method abs : float -> float meth
+  method abs : number_t -> number_t meth
 
-    method acos : float -> float meth
+  method acos : number_t -> number_t meth
 
-    method asin : float -> float meth
+  method asin : number_t -> number_t meth
 
-    method atan : float -> float meth
+  method atan : number_t -> number_t meth
 
-    method atan2 : float -> float -> float meth
+  method atan2 : number_t -> number_t -> number_t meth
 
-    method ceil : float -> float meth
+  method ceil : number_t -> number_t meth
 
-    method cos : float -> float meth
+  method cos : number_t -> number_t meth
 
-    method exp : float -> float meth
+  method exp : number_t -> number_t meth
 
-    method floor : float -> float meth
+  method floor : number_t -> number_t meth
 
-    method log : float -> float meth
+  method log : number_t -> number_t meth
 
-    method max : float -> float -> float meth
+  method max : number_t -> number_t -> number_t meth
 
-    method max_3 : float -> float -> float -> float meth
+  method max_3 : number_t -> number_t -> number_t -> number_t meth
 
-    method max_4 : float -> float -> float -> float -> float meth
+  method max_4 : number_t -> number_t -> number_t -> number_t -> number_t meth
 
-    method min : float -> float -> float meth
+  method min : number_t -> number_t -> number_t meth
 
-    method min_3 : float -> float -> float -> float meth
+  method min_3 : number_t -> number_t -> number_t -> number_t meth
 
-    method min_4 : float -> float -> float -> float -> float meth
+  method min_4 : number_t -> number_t -> number_t -> number_t -> number_t meth
 
-    method pow : float -> float -> float meth
+  method pow : number_t -> number_t -> number_t meth
 
-    method random : float meth
+  method random : number_t meth
 
-    method round : float -> float meth
+  method round : number_t -> number_t meth
 
-    method sin : float -> float meth
+  method sin : number_t -> number_t meth
 
-    method sqrt : float -> float meth
+  method sqrt : number_t -> number_t meth
 
-    method tan : float -> float meth
-  end
+  method tan : number_t -> number_t meth
+end
 
 val math : math t
 (** The Math object *)
 
 (** Specification of Javascript error object. *)
-class type error =
-  object
-    method name : js_string t prop
+class type error = object
+  method name : js_string t prop
 
-    method message : js_string t prop
+  method message : js_string t prop
 
-    method stack : js_string t optdef prop
+  method stack : js_string t optdef prop
 
-    method toString : js_string t meth
-  end
+  method toString : js_string t meth
+end
 
 val error_constr : (js_string t -> error t) constr
 (** Constructor of [Error] objects:
-      [new%js error_constr (msg)]
+      [new%js error_constr msg]
       returns an [Error] object with the message [msg]. *)
 
 module Js_error : sig
@@ -720,12 +739,11 @@ module Js_error : sig
 end
 
 (** Specification of Javascript JSON object. *)
-class type json =
-  object
-    method parse : js_string t -> 'a meth
+class type json = object
+  method parse : js_string t -> 'a meth
 
-    method stringify : 'a -> js_string t meth
-  end
+  method stringify : 'a -> js_string t meth
+end
 
 val _JSON : json t
 (** JSON object *)
@@ -761,7 +779,7 @@ val isNaN : 'a -> bool
 
 val parseInt : js_string t -> int
 
-val parseFloat : js_string t -> float
+val parseFloat : js_string t -> number_t
 
 (** {2 Conversion functions between Javascript and OCaml types} *)
 
@@ -793,6 +811,32 @@ external to_bytestring : js_string t -> string = "caml_string_of_jsbytes"
 (** Conversion of strings of bytes from Javascript to OCaml.  (The
       Javascript string should only contain UTF-16 code points below
       255.) *)
+
+external float : float -> number_t = "caml_js_from_float"
+(** Conversion of OCaml floats to Javascript numbers. *)
+
+external to_float : number_t -> float = "caml_js_to_float"
+(** Conversion of Javascript numbers to OCaml floats. *)
+
+external number_of_float : float -> number t = "caml_js_from_float"
+(** Conversion of OCaml floats to Javascript number objects. *)
+
+external float_of_number : number t -> float = "caml_js_to_float"
+(** Conversion of Javascript number objects to OCaml floats. *)
+
+external int32 : int32 -> number_t = "caml_js_from_int32"
+(** Conversion of OCaml floats to Javascript numbers. *)
+
+external to_int32 : number_t -> int32 = "caml_js_to_int32"
+(** Conversion of Javascript numbers to OCaml 32-bits. The given
+    floating-point number is truncated to an integer. *)
+
+external nativeint : nativeint -> number_t = "caml_js_from_nativeint"
+(** Conversion of OCaml 32-bits integers to Javascript numbers. *)
+
+external to_nativeint : number_t -> nativeint = "caml_js_to_nativeint"
+(** Conversion of Javascript numbers to OCaml native integers. The
+    given floating-point number is truncated to an integer. *)
 
 (** {2 Convenience coercion functions} *)
 
@@ -925,7 +969,8 @@ module Unsafe : sig
   val global : < .. > t
   (** Javascript global object *)
 
-  external callback : ('a -> 'b) -> ('c, 'a -> 'b) meth_callback = "%identity"
+  external callback : ('a -> 'b) -> ('c, 'a -> 'b) meth_callback
+    = "caml_js_wrap_callback_unsafe"
   (** Wrap an OCaml function so that it can be invoked from
         Javascript. Contrary to [Js.wrap_callback], partial
         application and over-application are not supported: missing
@@ -961,10 +1006,16 @@ module Unsafe : sig
   external meth_callback_with_arity : int -> ('b -> 'a) -> ('b, 'a) meth_callback
     = "caml_js_wrap_meth_callback_strict"
 
+  external equals : _ -> _ -> bool = "caml_js_equals"
+  (** Javascript [==] equality operator. *)
+
+  external strict_equals : _ -> _ -> bool = "caml_js_strict_equals"
+  (** Javascript [===] equality operator. *)
+
   (** {3 Deprecated functions.} *)
 
   external variable : string -> 'a = "caml_js_var"
-    [@@ocaml.deprecated "[since 2.6] use Js.Unsafe.pure_js_expr instead"]
+  [@@ocaml.deprecated "[since 2.6] use Js.Unsafe.pure_js_expr instead"]
   (** Access a Javascript variable.  [variable "foo"] will
         return the current value of variable [foo]. *)
 end
@@ -972,13 +1023,13 @@ end
 (** {2 Deprecated functions and types.} *)
 
 val string_of_error : error t -> string
-  [@@ocaml.deprecated "[since 4.0] Use [Js_error.to_string] instead."]
+[@@ocaml.deprecated "[since 4.0] Use [Js_error.to_string] instead."]
 
 val raise_js_error : error t -> 'a
-  [@@ocaml.deprecated "[since 4.0] Use [Js_error.raise_] instead."]
+[@@ocaml.deprecated "[since 4.0] Use [Js_error.raise_] instead."]
 
 val exn_with_js_backtrace : exn -> force:bool -> exn
-  [@@ocaml.deprecated "[since 4.0] Use [Js_error.raise_] instead."]
+[@@ocaml.deprecated "[since 4.0] Use [Js_error.raise_] instead."]
 (** Attach a JavasScript error to an OCaml exception.  if [force = false] and a
     JavasScript error is already attached, it will do nothing. This function is useful to
     store and retrieve information about JavaScript stack traces.
@@ -988,7 +1039,7 @@ val exn_with_js_backtrace : exn -> force:bool -> exn
 *)
 
 val js_error_of_exn : exn -> error t opt
-  [@@ocaml.deprecated "[since 4.0] Use [Js_error.of_exn] instead."]
+[@@ocaml.deprecated "[since 4.0] Use [Js_error.of_exn] instead."]
 (** Extract a JavaScript error attached to an OCaml exception, if any.  This is useful to
     inspect an eventual stack strace, especially when sourcemap is enabled. *)
 
@@ -998,14 +1049,6 @@ exception Error of error t [@ocaml.deprecated "[since 4.0] Use [Js_error.Exn] in
     it will be serialized and wrapped into a [Failure] exception.
   *)
 
-external float : float -> float = "%identity" [@@ocaml.deprecated "[since 2.0]."]
-
-(** Conversion of OCaml floats to Javascript numbers. *)
-
-external to_float : float -> float = "%identity" [@@ocaml.deprecated "[since 2.0]."]
-
-(** Conversion of Javascript numbers to OCaml floats. *)
-
-type float_prop = float prop [@@ocaml.deprecated "[since 2.0]."]
+type float_prop = number_t prop [@@ocaml.deprecated "[since 2.0]."]
 
 (** Type of float properties. *)

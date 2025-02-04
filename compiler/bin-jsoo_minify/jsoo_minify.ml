@@ -22,7 +22,7 @@ open Js_of_ocaml_compiler
 
 let error k = Format.ksprintf (fun s -> failwith s) k
 
-let _ = Sys.catch_break true
+let () = Sys.catch_break true
 
 let f { Cmd_arg.common; output_file; use_stdin; files } =
   Jsoo_cmdline.Arg.eval common;
@@ -68,15 +68,21 @@ let f { Cmd_arg.common; output_file; use_stdin; files } =
       else p
     in
     let free = new Js_traverse.free in
-    let _pfree = free#program p in
-    let toplevel_def = free#get_def_name in
-    let () = Var_printer.add_reserved (StringSet.elements toplevel_def) in
+    let (_ : Javascript.program) = free#program p in
+    let toplevel_def_and_use =
+      let state = free#state in
+      Javascript.IdentSet.union state.def_var state.use
+    in
+    Javascript.IdentSet.iter
+      (function
+        | V _ -> ()
+        | S { name = Utf8_string.Utf8 x; _ } -> Var_printer.add_reserved x)
+      toplevel_def_and_use;
     let true_ () = true in
     let open Config in
     let passes : ((unit -> bool) * (unit -> Js_traverse.mapper)) list =
       [ ( Flag.shortvar
-        , fun () -> (new Js_traverse.rename_variable toplevel_def :> Js_traverse.mapper)
-        )
+        , fun () -> (new Js_traverse.rename_variable ~esm:false :> Js_traverse.mapper) )
       ; (true_, fun () -> new Js_traverse.simpl)
       ; (true_, fun () -> new Js_traverse.clean)
       ]
@@ -86,7 +92,8 @@ let f { Cmd_arg.common; output_file; use_stdin; files } =
           if t () then (m ())#program p else p)
     in
     let p = Js_assign.program p in
-    Js_output.program pp p
+    let (_ : Source_map.info) = Js_output.program pp p in
+    ()
   in
   with_output (fun out_channel ->
       let pp = Pretty_print.to_out_channel out_channel in
@@ -96,7 +103,7 @@ let main =
   let t = Cmdliner.Term.(const f $ Cmd_arg.options) in
   Cmdliner.Cmd.v Cmd_arg.info t
 
-let _ =
+let (_ : int) =
   try
     Cmdliner.Cmd.eval
       ~catch:false

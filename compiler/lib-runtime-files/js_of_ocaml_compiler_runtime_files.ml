@@ -23,7 +23,6 @@ let runtime =
     ; backtrace
     ; bigarray
     ; bigstring
-    ; bigstring_cstruct
     ; compare
     ; fail
     ; format
@@ -55,6 +54,10 @@ let runtime =
     ; domain
     ; prng
     ; sync
+    ; effect_
+    ; zstd
+    ; runtime_events
+    ; blake2
     ]
 
 include Files

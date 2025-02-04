@@ -19,8 +19,11 @@
 ==[[linker|Link javascript code]]
 ==[[separate-compilation|Separate compilation]]
 ==[[tailcall|About tailcall optimization]]
+==[[effects|Effect handlers]]
 
 =Misc
+==[[runtime-files|How to look up runtime files]]
+==[[build-toplevel|How to build a toplevel or use Dynlink]]
 ==[[debug|How to debug a program]]
 ==[[contribute|How to contribute]]
 ==[[performances|Performances]]

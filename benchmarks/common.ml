@@ -45,7 +45,9 @@ let mean_variance a =
     let d = a.(i) -. m in
     s := !s +. (d *. d)
   done;
-  m, !s /. float (Array.length a)
+  (* https://en.wikipedia.org/wiki/Unbiased_estimation_of_standard_deviation
+     https://en.wikipedia.org/wiki/Bessel%27s_correction *)
+  m, !s /. float (Array.length a - 1)
 
 (*        90%    95%    98%    99%    99.5%  99.8%  99.9%*)
 let tinv_table =
@@ -143,7 +145,9 @@ module Spec : sig
 
   val js_of_ocaml : t
 
-  val ocamljs : t
+  val js_of_ocaml_o3 : t
+
+  val js_of_ocaml_js_string : t
 
   val byte_unsafe : t
 
@@ -159,7 +163,7 @@ module Spec : sig
 
   val js_of_ocaml_call : t
 
-  val ocamljs_unsafe : t
+  val js_of_ocaml_effects : t
 end = struct
   type t =
     { dir : string
@@ -186,12 +190,12 @@ end = struct
            | { st_kind = S_REG | S_LNK; _ } -> true
            | _ -> false)
     |> (if spec.ext = ""
-       then fun x -> x
-       else
-         fun x ->
-         x
-         |> List.filter ~f:(fun nm -> Filename.check_suffix nm spec.ext)
-         |> List.map ~f:Filename.chop_extension)
+        then fun x -> x
+        else
+          fun x ->
+          x
+          |> List.filter ~f:(fun nm -> Filename.check_suffix nm spec.ext)
+          |> List.map ~f:Filename.chop_extension)
     |> List.sort ~cmp:compare
 
   let ml = create "ml" ".ml"
@@ -204,7 +208,9 @@ end = struct
 
   let js_of_ocaml = create "js_of_ocaml" ".js"
 
-  let ocamljs = create "ocamljs" ".js"
+  let js_of_ocaml_o3 = create "o3" ".js"
+
+  let js_of_ocaml_js_string = create "jsstring" ".js"
 
   let byte_unsafe = create "unsafe/byte" ""
 
@@ -220,7 +226,7 @@ end = struct
 
   let js_of_ocaml_call = create "nooptcall" ".js"
 
-  let ocamljs_unsafe = create "unsafe/ocamljs" ".js"
+  let js_of_ocaml_effects = create "effects" ".js"
 end
 
 let rec mkdir d =

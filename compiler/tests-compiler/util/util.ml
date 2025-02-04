@@ -156,13 +156,11 @@ end
 
 let parse_js file =
   let content = file |> Filetype.read_js |> Filetype.string_of_js_text in
-  let lexbuf = Lexing.from_string content in
-  let lexbuf =
-    { lexbuf with
-      lex_curr_p = { lexbuf.lex_curr_p with pos_fname = Filetype.path_of_js_file file }
-    }
-  in
-  Jsoo.Parse_js.Lexer.of_lexbuf lexbuf |> Jsoo.Parse_js.parse
+  let filename = Filetype.path_of_js_file file in
+  try Jsoo.Parse_js.Lexer.of_string ~filename content |> Jsoo.Parse_js.parse
+  with Jsoo.Parse_js.Parsing_error pi as e ->
+    Printf.eprintf "failed to parse %s:%d:%d\n%s\n" filename pi.line pi.col content;
+    raise e
 
 let channel_to_string c_in =
   let good_round_number = 1024 in
@@ -174,47 +172,84 @@ let channel_to_string c_in =
   (try loop () with End_of_file -> ());
   Buffer.contents buffer
 
-let exec_to_string_exn ~cmd =
+let exec_to_string_exn ?input ~fail ~cmd () =
+  let build_path_prefix_map = "BUILD_PATH_PREFIX_MAP=" in
   let cwd = Sys.getcwd () in
   let build_path =
     let open Js_of_ocaml_compiler.Build_path_prefix_map in
-    let str = encode_map [ Some { target = "/dune-root"; source = cwd } ] in
-    Format.sprintf "BUILD_PATH_PREFIX_MAP=%s" str
+    encode_map [ Some { target = "/dune-root"; source = cwd } ]
   in
-  let env = Array.concat [ Unix.environment (); [| build_path |] ] in
+  let env =
+    let prev, env =
+      Unix.environment ()
+      |> Array.to_list
+      |> List.partition ~f:(String.is_prefix ~prefix:build_path_prefix_map)
+    in
+    let prev =
+      List.filter_map ~f:(String.drop_prefix ~prefix:build_path_prefix_map) prev
+    in
+    let build_path =
+      build_path_prefix_map ^ String.concat ~sep:":" (build_path :: prev)
+    in
+    Array.of_list (build_path :: env)
+  in
   let proc_result_ok std_out =
     let open Unix in
     function
     | WEXITED 0 -> std_out
     | WEXITED i ->
-        Format.printf "process exited with error code %d\n %s\n" i cmd;
-        std_out
+        Format.sprintf "%s\nprocess exited with error code %d\n %s\n" std_out i cmd
     | WSIGNALED i ->
-        Format.printf "process signaled with signal number %d\n %s\n" i cmd;
-        std_out
+        Format.sprintf "%s\nprocess signaled with signal number %d\n %s\n" std_out i cmd
     | WSTOPPED i ->
-        Format.printf "process stopped with signal number %d\n %s\n" i cmd;
-        std_out
+        Format.sprintf "%s\nprocess stopped with signal number %d\n %s\n" std_out i cmd
   in
-  let ((proc_in, _, proc_err) as proc_full) = Unix.open_process_full cmd env in
+  let ((proc_in, oc, proc_err) as proc_full) = Unix.open_process_full cmd env in
+  (match input with
+  | None -> ()
+  | Some s ->
+      output_string oc s;
+      close_out oc);
   let results = channel_to_string proc_in in
   let results' = channel_to_string proc_err in
-  proc_result_ok
-    (String.concat
-       ~sep:"\n"
-       (List.filter
-          ~f:(function
-            | "" -> false
-            | _ -> true)
-          [ results'; results ]))
-    (Unix.close_process_full proc_full)
+  let exit_status = Unix.close_process_full proc_full in
+  let res =
+    proc_result_ok
+      (String.concat
+         ~sep:"\n"
+         (List.filter
+            ~f:(function
+              | "" -> false
+              | _ -> true)
+            [ results'; results ]))
+      exit_status
+  in
+  match exit_status with
+  | WEXITED n when n <> 0 && fail ->
+      print_endline res;
+      raise_notrace (Failure "non-zero exit code")
+  | _ -> res
 
 let run_javascript file =
-  exec_to_string_exn ~cmd:(Format.sprintf "%s %s" node (Filetype.path_of_js_file file))
+  exec_to_string_exn
+    ~fail:false
+    ~cmd:(Format.sprintf "%s %s" node (Filetype.path_of_js_file file))
+    ()
+
+let check_javascript file =
+  exec_to_string_exn
+    ~fail:false
+    ~cmd:(Format.sprintf "%s --check %s" node (Filetype.path_of_js_file file))
+    ()
+
+let check_javascript_source source =
+  exec_to_string_exn ~input:source ~fail:false ~cmd:(Format.sprintf "%s --check" node) ()
 
 let run_bytecode file =
   exec_to_string_exn
+    ~fail:false
     ~cmd:(Format.sprintf "%s %s" ocamlrun (Filetype.path_of_bc_file file))
+    ()
 
 let swap_extention filename ~ext =
   Format.sprintf "%s.%s" (Filename.remove_extension filename) ext
@@ -249,15 +284,25 @@ let extract_sourcemap file =
         | None -> String.concat ~sep:"\n" (input_lines line)
         | Some base64 -> Js_of_ocaml_compiler.Base64.decode_exn base64
       in
-      Some (Js_of_ocaml_compiler.Source_map_io.of_string content)
+      Some (Js_of_ocaml_compiler.Source_map.of_string content)
   | _ -> None
 
-let compile_to_javascript ?(flags = []) ~pretty ~sourcemap file =
+let compile_to_javascript
+    ?(flags = [])
+    ?(use_js_string = false)
+    ?(effects = false)
+    ~pretty
+    ~sourcemap
+    file =
   let out_file = swap_extention file ~ext:"js" in
   let extra_args =
     List.flatten
       [ (if pretty then [ "--pretty" ] else [])
       ; (if sourcemap then [ "--sourcemap" ] else [])
+      ; (if effects then [ "--enable=effects" ] else [ "--disable=effects" ])
+      ; (if use_js_string
+         then [ "--enable=use-js-string" ]
+         else [ "--disable=use-js-string" ])
       ; flags
       ]
   in
@@ -267,11 +312,16 @@ let compile_to_javascript ?(flags = []) ~pretty ~sourcemap file =
   in
   let cmd = Format.sprintf "%s %s %s -o %s" compiler_location extra_args file out_file in
 
-  let stdout = exec_to_string_exn ~cmd in
+  let stdout = exec_to_string_exn ~fail:true ~cmd () in
   print_string stdout;
   (* this print shouldn't do anything, so if
      something weird happens, we'll get the results here *)
-  Filetype.js_file_of_path out_file
+  let jsfile = Filetype.js_file_of_path out_file in
+  let stdout = check_javascript jsfile in
+  print_string stdout;
+  (* this print shouldn't do anything, so if
+     something weird happens, we'll get the results here *)
+  jsfile
 
 let jsoo_minify ?(flags = []) ~pretty file =
   let file = Filetype.path_of_js_file file in
@@ -283,23 +333,43 @@ let jsoo_minify ?(flags = []) ~pretty file =
   in
   let cmd = Format.sprintf "%s %s %s -o %s" compiler_location extra_args file out_file in
 
-  let stdout = exec_to_string_exn ~cmd in
+  let stdout = exec_to_string_exn ~fail:true ~cmd () in
   print_string stdout;
   (* this print shouldn't do anything, so if
      something weird happens, we'll get the results here *)
   Filetype.js_file_of_path out_file
 
-let compile_bc_to_javascript ?flags ?(pretty = true) ?(sourcemap = true) file =
-  Filetype.path_of_bc_file file |> compile_to_javascript ?flags ~pretty ~sourcemap
+let compile_bc_to_javascript
+    ?flags
+    ?effects
+    ?use_js_string
+    ?(pretty = true)
+    ?(sourcemap = true)
+    file =
+  Filetype.path_of_bc_file file
+  |> compile_to_javascript ?flags ?effects ?use_js_string ~pretty ~sourcemap
 
-let compile_cmo_to_javascript ?flags ?(pretty = true) ?(sourcemap = true) file =
-  Filetype.path_of_cmo_file file |> compile_to_javascript ?flags ~pretty ~sourcemap
+let compile_cmo_to_javascript
+    ?(flags = [])
+    ?effects
+    ?use_js_string
+    ?(pretty = true)
+    ?(sourcemap = true)
+    file =
+  Filetype.path_of_cmo_file file
+  |> compile_to_javascript
+       ?effects
+       ?use_js_string
+       ~flags:([ "--disable"; "header" ] @ flags)
+       ~pretty
+       ~sourcemap
 
 let compile_ocaml_to_cmo ?(debug = true) file =
   let file = Filetype.path_of_ocaml_file file in
   let out_file = swap_extention file ~ext:"cmo" in
   let (stdout : string) =
     exec_to_string_exn
+      ~fail:true
       ~cmd:
         (Format.sprintf
            "%s -c %s %s -o %s"
@@ -307,6 +377,7 @@ let compile_ocaml_to_cmo ?(debug = true) file =
            (if debug then "-g" else "")
            file
            out_file)
+      ()
   in
   print_string stdout;
   Filetype.cmo_file_of_path out_file
@@ -316,14 +387,16 @@ let compile_ocaml_to_bc ?(debug = true) ?(unix = false) file =
   let out_file = swap_extention file ~ext:"bc" in
   let (stdout : string) =
     exec_to_string_exn
+      ~fail:true
       ~cmd:
         (Format.sprintf
            "%s -no-check-prims %s %s %s -o %s"
            ocamlc
            (if debug then "-g" else "")
-           (if unix then "unix.cma" else "")
+           (if unix then "-I +unix unix.cma" else "")
            file
            out_file)
+      ()
   in
   print_string stdout;
   Filetype.bc_file_of_path out_file
@@ -332,12 +405,14 @@ let compile_lib list name =
   let out_file = swap_extention name ~ext:"cma" in
   let (stdout : string) =
     exec_to_string_exn
+      ~fail:true
       ~cmd:
         (Format.sprintf
            "%s -g -a %s -o %s"
            ocamlc
            (String.concat ~sep:" " (List.map ~f:Filetype.path_of_cmo_file list))
            out_file)
+      ()
   in
   print_string stdout;
   Filetype.cmo_file_of_path out_file
@@ -346,24 +421,36 @@ let program_to_string ?(compact = false) p =
   let buffer = Buffer.create 17 in
   let pp = Jsoo.Pretty_print.to_buffer buffer in
   Jsoo.Pretty_print.set_compact pp compact;
-  Jsoo.Js_output.program pp p;
+  let (_ : Jsoo.Source_map.info) = Jsoo.Js_output.program pp p in
+  (* This final comment should help to keep merge-confict inside
+     {| .. |}, allowing to resolve confict with [dune promote]. *)
+  Buffer.add_string buffer "//end\n";
   Buffer.contents buffer
 
 let expression_to_string ?(compact = false) e =
   let module J = Jsoo.Javascript in
-  let p = [ J.Statement (J.Expression_statement e), J.N ] in
+  let p = [ J.Expression_statement e, J.N ] in
   program_to_string ~compact p
 
 class find_variable_declaration r n =
   object
     inherit Jsoo.Js_traverse.map as super
 
-    method! variable_declaration v =
+    method! variable_declaration k v =
       (match v with
-      | Jsoo.Javascript.S { name; _ }, _ when String.equal name n -> r := v :: !r
+      | DeclIdent (Jsoo.Javascript.S { name = Utf8 name; _ }, _) when String.equal name n
+        -> r := v :: !r
       | _ -> ());
-      super#variable_declaration v
+      super#variable_declaration k v
   end
+
+let find_variable program n =
+  let r = ref [] in
+  let o = new find_variable_declaration r n in
+  ignore (o#program program);
+  match !r with
+  | [ DeclIdent (_, Some (expression, _)) ] -> expression
+  | _ -> raise Not_found
 
 let print_var_decl program n =
   let r = ref [] in
@@ -371,28 +458,46 @@ let print_var_decl program n =
   ignore (o#program program);
   print_string (Format.sprintf "var %s = " n);
   match !r with
-  | [ (_, Some (expression, _)) ] -> print_string (expression_to_string expression)
+  | [ DeclIdent (_, Some (expression, _)) ] ->
+      print_string (expression_to_string expression)
   | _ -> print_endline "not found"
 
 class find_function_declaration r n =
   object
     inherit Jsoo.Js_traverse.map as super
 
-    method! source s =
+    method! statement s =
+      let open Jsoo.Javascript in
       (match s with
-      | Function_declaration fd ->
-          let record =
-            match fd, n with
-            | _, None -> true
-            | (Jsoo.Javascript.S { name; _ }, _, _, _), Some n -> String.equal name n
-            | _ -> false
-          in
-          if record then r := fd :: !r
-      | Statement _ -> ());
-      super#source s
+      | Variable_statement (_, l) ->
+          List.iter l ~f:(function
+              | DeclIdent
+                  ( (S { name = Utf8 name; _ } as id)
+                  , Some ((EFun (_, fun_decl) | EArrow (fun_decl, _, _)), _) ) -> (
+                  let fd = id, fun_decl in
+                  match n with
+                  | None -> r := fd :: !r
+                  | Some n -> if String.equal name n then r := fd :: !r else ())
+              | _ -> ())
+      | Function_declaration (name, fun_decl) -> (
+          match name, n with
+          | _, None -> r := (name, fun_decl) :: !r
+          | S { name = Utf8 s; _ }, Some n ->
+              if String.equal s n then r := (name, fun_decl) :: !r else ()
+          | _ -> ())
+      | _ -> ());
+      super#statement s
   end
 
 let print_program p = print_string (program_to_string p)
+
+let find_function program n =
+  let r = ref [] in
+  let o = new find_function_declaration r (Some n) in
+  ignore (o#program program);
+  match !r with
+  | [ (_, fd) ] -> fd
+  | _ -> raise Not_found
 
 let print_fun_decl program n =
   let r = ref [] in
@@ -400,7 +505,8 @@ let print_fun_decl program n =
   ignore (o#program program);
   let module J = Jsoo.Javascript in
   match !r with
-  | [ fd ] -> print_string (program_to_string [ J.Function_declaration fd, J.N ])
+  | [ (n, fd) ] ->
+      print_string (program_to_string [ J.Function_declaration (n, fd), J.N ])
   | [] -> print_endline "not found"
   | l -> print_endline (Format.sprintf "%d functions found" (List.length l))
 
@@ -413,32 +519,74 @@ let compile_and_run_bytecode ?unix s =
       |> run_bytecode
       |> print_endline)
 
-let compile_and_run ?flags ?unix s =
+let compile_and_run
+    ?debug
+    ?pretty
+    ?(skip_modern = false)
+    ?(flags = [])
+    ?effects
+    ?use_js_string
+    ?unix
+    s =
   with_temp_dir ~f:(fun () ->
-      s
-      |> Filetype.ocaml_text_of_string
-      |> Filetype.write_ocaml ~name:"test.ml"
-      |> compile_ocaml_to_bc ?unix
-      |> compile_bc_to_javascript ?flags
-      |> run_javascript
-      |> print_endline)
+      let bytecode_file =
+        s
+        |> Filetype.ocaml_text_of_string
+        |> Filetype.write_ocaml ~name:"test.ml"
+        |> compile_ocaml_to_bc ?debug ?unix
+      in
+      let output_without_stdlib_modern =
+        compile_bc_to_javascript
+          ?pretty
+          ~flags
+          ?effects
+          ?use_js_string
+          ?sourcemap:debug
+          bytecode_file
+        |> run_javascript
+      in
+      print_endline output_without_stdlib_modern;
+      if not skip_modern
+      then
+        let output_with_stdlib_modern =
+          compile_bc_to_javascript
+            ~flags:(flags @ [ "+stdlib_modern.js" ])
+            ?effects
+            ?use_js_string
+            ?sourcemap:debug
+            bytecode_file
+          |> run_javascript
+        in
+        if not (String.equal output_without_stdlib_modern output_with_stdlib_modern)
+        then (
+          print_endline "Output was different with stdlib_modern.js:";
+          print_endline "===========================================";
+          print_string output_with_stdlib_modern;
+          print_endline "==========================================="))
 
-let compile_and_parse_whole_program ?(debug = true) ?flags ?unix s =
+let compile_and_parse_whole_program
+    ?(debug = true)
+    ?pretty
+    ?flags
+    ?effects
+    ?use_js_string
+    ?unix
+    s =
   with_temp_dir ~f:(fun () ->
       s
       |> Filetype.ocaml_text_of_string
       |> Filetype.write_ocaml ~name:"test.ml"
       |> compile_ocaml_to_bc ?unix ~debug
-      |> compile_bc_to_javascript ?flags ~pretty:true ~sourcemap:debug
+      |> compile_bc_to_javascript ?pretty ?flags ?effects ?use_js_string ~sourcemap:debug
       |> parse_js)
 
-let compile_and_parse ?(debug = true) ?flags s =
+let compile_and_parse ?(debug = true) ?pretty ?flags ?effects ?use_js_string s =
   with_temp_dir ~f:(fun () ->
       s
       |> Filetype.ocaml_text_of_string
       |> Filetype.write_ocaml ~name:"test.ml"
       |> compile_ocaml_to_cmo ~debug
-      |> compile_cmo_to_javascript ?flags ~pretty:true ~sourcemap:debug
+      |> compile_cmo_to_javascript ?pretty ?flags ?effects ?use_js_string ~sourcemap:debug
       |> parse_js)
 
 let normalize_path s =

@@ -22,10 +22,9 @@ open Js_of_ocaml_lwt
 open! Import
 include Graphics
 
-class type context_ =
-  object
-    method canvas : Dom_html.canvasElement Js.t Js.readonly_prop
-  end
+class type context_ = object
+  method canvas : Dom_html.canvasElement Js.t Js.readonly_prop
+end
 
 type context = context_ Js.t
 
@@ -49,13 +48,13 @@ let open_canvas x =
 let compute_real_pos (elt : #Dom_html.element Js.t) ev =
   let r = elt##getBoundingClientRect in
   let x =
-    (float_of_int ev##.clientX -. r##.left)
-    /. (r##.right -. r##.left)
+    (float_of_int ev##.clientX -. Js.to_float r##.left)
+    /. (Js.to_float r##.right -. Js.to_float r##.left)
     *. float_of_int elt##.width
   in
   let y =
-    (float_of_int ev##.clientY -. r##.top)
-    /. (r##.bottom -. r##.top)
+    (float_of_int ev##.clientY -. Js.to_float r##.top)
+    /. (Js.to_float r##.bottom -. Js.to_float r##.top)
     *. float_of_int elt##.height
   in
   truncate x, elt##.height - truncate y
@@ -108,12 +107,12 @@ let loop elist f : unit =
         mouse_x := cx;
         mouse_y := cy;
         (if List.mem Mouse_motion elist
-        then
-          let mouse_x, mouse_y = get_pos_mouse () in
-          let s =
-            { mouse_x; mouse_y; button = !button; keypressed = false; key = null }
-          in
-          f s);
+         then
+           let mouse_x, mouse_y = get_pos_mouse () in
+           let s =
+             { mouse_x; mouse_y; button = !button; keypressed = false; key = null }
+           in
+           f s);
         Js._true);
   (* EventListener sur le doc car pas de moyen simple de le faire
      sur un canvasElement *)

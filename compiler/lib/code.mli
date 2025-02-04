@@ -46,7 +46,7 @@ module DebugAddr : sig
 end
 
 module Var : sig
-  type t
+  type t [@@ocaml.immediate]
 
   val print : Format.formatter -> t -> unit
 
@@ -68,10 +68,6 @@ module Var : sig
 
   val compare : t -> t -> int
 
-  val loc : t -> Parse_info.t -> unit
-
-  val get_loc : t -> Parse_info.t option
-
   val get_name : t -> string option
 
   val name : t -> string -> unit
@@ -88,8 +84,18 @@ module Var : sig
 
   module Map : Map.S with type key = t
 
+  module Hashtbl : Hashtbl.S with type key = t
+
   module Tbl : sig
     type key = t
+
+    module DataSet : sig
+      type 'a t
+
+      val iter : ('a -> unit) -> 'a t -> unit
+
+      val fold : ('a -> 'acc -> 'acc) -> 'a t -> 'acc -> 'acc
+    end
 
     type 'a t
 
@@ -100,6 +106,12 @@ module Var : sig
     val set : 'a t -> key -> 'a -> unit
 
     val make : size -> 'a -> 'a t
+
+    val make_set : size -> 'a DataSet.t t
+
+    val add_set : 'a DataSet.t t -> key -> 'a -> unit
+
+    val iter : (key -> 'a -> unit) -> 'a t -> unit
   end
 
   module ISet : sig
@@ -140,35 +152,80 @@ type array_or_not =
   | NotArray
   | Unknown
 
+module Native_string : sig
+  type t = private
+    | Byte of string
+    | Utf of Utf8_string.t
+
+  val of_string : string -> t
+
+  val of_bytestring : string -> t
+
+  val equal : t -> t -> bool
+end
+
 type constant =
   | String of string
-  | NativeString of string
+  | NativeString of Native_string.t
   | Float of float
   | Float_array of float array
-  | Int64 of int64
+  | Int of Targetint.t
+  | Int32 of Int32.t  (** Only produced when compiling to WebAssembly. *)
+  | Int64 of Int64.t
+  | NativeInt of Int32.t  (** Only produced when compiling to WebAssembly. *)
   | Tuple of int * constant array * array_or_not
-  | Int of int32
 
-val constant_equal : constant -> constant -> bool option
+module Constant : sig
+  type t = constant
+
+  val ocaml_equal : t -> t -> bool option
+  (** Guaranteed equality in terms of OCaml [(=)]: if [constant_equal a b =
+    Some v], then [Poly.(=) a b = v]. This is used for optimization purposes. *)
+end
+
+type loc =
+  | No
+  | Before of Addr.t
+  | After of Addr.t
+
+val noloc : loc
+
+val location_of_pc : int -> loc
 
 type prim_arg =
   | Pv of Var.t
   | Pc of constant
 
+type special = Alias_prim of string
+
+type mutability =
+  | Immutable
+  | Maybe_mutable
+
+type field_type =
+  | Non_float
+  | Float
+
 type expr =
-  | Apply of Var.t * Var.t list * bool
-  (* if true, then # of arguments = # of parameters *)
-  | Block of int * Var.t array * array_or_not
-  | Field of Var.t * int
+  | Apply of
+      { f : Var.t
+      ; args : Var.t list
+      ; exact : bool (* if true, then # of arguments = # of parameters *)
+      }
+  | Block of int * Var.t array * array_or_not * mutability
+  | Field of Var.t * int * field_type
   | Closure of Var.t list * cont
   | Constant of constant
   | Prim of prim * prim_arg list
+  | Special of special
 
 type instr =
   | Let of Var.t * expr
-  | Set_field of Var.t * int * Var.t
+  | Assign of Var.t * Var.t
+  | Set_field of Var.t * int * field_type * Var.t
   | Offset_ref of Var.t * int
   | Array_set of Var.t * Var.t * Var.t
+  | Event of Parse_info.t
 
 type last =
   | Return of Var.t
@@ -176,13 +233,12 @@ type last =
   | Stop
   | Branch of cont
   | Cond of Var.t * cont * cont
-  | Switch of Var.t * cont array * cont array
-  | Pushtrap of cont * Var.t * cont * Addr.Set.t
-  | Poptrap of cont * Addr.t
+  | Switch of Var.t * cont array
+  | Pushtrap of cont * Var.t * cont
+  | Poptrap of cont
 
 type block =
   { params : Var.t list
-  ; handler : (Var.t * cont) option
   ; body : instr list
   ; branch : last
   }
@@ -197,6 +253,10 @@ module Print : sig
   type xinstr =
     | Instr of instr
     | Last of last
+
+  val expr : Format.formatter -> expr -> unit
+
+  val constant : Format.formatter -> constant -> unit
 
   val var_list : Format.formatter -> Var.t list -> unit
 
@@ -217,10 +277,37 @@ type fold_blocs_poly = { fold : 'a. 'a fold_blocs } [@@unboxed]
 
 val fold_closures :
   program -> (Var.t option -> Var.t list -> cont -> 'd -> 'd) -> 'd -> 'd
+(** [fold_closures p f init] folds [f] over all closures in the program [p],
+    starting from the initial value [init]. For each closure, [f] is called
+    with the following arguments: the closure name (enclosed in
+    {!Stdlib.Some}), its parameter list, the address and parameter instantiation
+    of its first block, and the current accumulator. In addition, [f] is called
+    on the initial block [p.start], with [None] as the closure name.
+    All closures in all blocks of [p] are included in the fold, not only the
+    ones reachable from [p.start]. *)
+
+val fold_closures_innermost_first :
+  program -> (Var.t option -> Var.t list -> cont -> 'd -> 'd) -> 'd -> 'd
+(** Similar to {!fold_closures}, but applies the fold function to the
+    innermost closures first. Unlike with {!fold_closures}, only the closures
+    reachable from [p.start] are considered. *)
+
+val fold_closures_outermost_first :
+  program -> (Var.t option -> Var.t list -> cont -> 'd -> 'd) -> 'd -> 'd
+(** Similar to {!fold_closures}, but applies the fold function to the
+    outermost closures first. Unlike with {!fold_closures}, only the closures
+    reachable from [p.start] are considered. *)
 
 val fold_children : 'c fold_blocs
 
+val fold_children_skip_try_body : 'c fold_blocs
+
+val poptraps : block Addr.Map.t -> Addr.t -> Addr.Set.t
+
 val traverse :
+  fold_blocs_poly -> (Addr.t -> 'c -> 'c) -> Addr.t -> block Addr.Map.t -> 'c -> 'c
+
+val preorder_traverse :
   fold_blocs_poly -> (Addr.t -> 'c -> 'c) -> Addr.t -> block Addr.Map.t -> 'c -> 'c
 
 val prepend : program -> instr list -> program

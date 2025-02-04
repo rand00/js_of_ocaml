@@ -17,6 +17,8 @@
  * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
  *)
 
+open Js_of_ocaml_compiler.Stdlib
+
 (* https://github.com/ocaml/ocaml/pull/9497 *)
 (* Original test case from the issue: *)
 
@@ -31,13 +33,14 @@ end =
 module IdSet = Set.Make (Id)
 
 let%expect_test _ =
-  (try
-     let basic_set = IdSet.singleton { id = 0 } in
-     ignore (IdSet.mem { id = 1 } basic_set : bool)
-     (* diverge here *)
-   with e -> print_endline @@ Printexc.to_string e);
-  [%expect
-    {| File "[^"]*test_rec_mod.ml", line [0-9]*, characters [0-9-]*: Undefined recursive module (regexp) |}]
+  try
+    let basic_set = IdSet.singleton { id = 0 } in
+    ignore (IdSet.mem { id = 1 } basic_set : bool)
+    (* diverge here *)
+  with e ->
+    if String.is_suffix ~suffix:"Undefined recursive module" (Printexc.to_string e)
+    then ()
+    else raise e
 
 (* Looping version *)
 module rec M1 : sig

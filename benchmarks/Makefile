@@ -4,12 +4,17 @@ GRAPHSNOPR = time.pdf time-optim.pdf nativejs.pdf
 # graphs with precompiled programs:
 GRAPHSPR = size.pdf size-optim.pdf compiletime.pdf
 
+# graphs showing the impact of supporting effects
+GRAPHSEFF = time-effects.pdf size-effects.pdf size-bzip2-effects.pdf
+
 # For full benchs:
-all: _perf graphsnopr graphspr _noperf
+all: _perf graphsnopr graphspr graphseff _noperf
 
 graphsnopr: _noprecomp $(GRAPHSNOPR)
 
 graphspr: __precomp $(GRAPHSPR)
+
+graphseff: __precomp $(GRAPHSEFF)
 
 # For fast benchs:
 test: _perf fastrun $(GRAPHS) _noperf
@@ -42,6 +47,10 @@ __run:
 	$(RUN) -all
 	touch __run
 
+__run_effects:
+	$(RUN) -fast -nobyteopt -effects
+	touch __run_effects
+
 fastrun:
 	make _noprecomp
 	echo "======================== WARNING: fast benchs!"
@@ -70,23 +79,21 @@ __missingcompiletimes:
 
 __missingsizes: __precomp
 	for i in $(missingsizes) ; do if [ ! -f $$i ] ; then echo 0 > $$i ; fi ; done
-	if [ -f results/sizes/ml/unison ] ; then echo 828471 > results/sizes/ml/unison ; fi
-	if [ -f results/sizes/ml/ocamlc ] ; then echo 800771 > results/sizes/ml/ocamlc ; fi
-	if [ -f results/sizes/ml/ocsigen_server ] ; then echo 0 > results/sizes/ml/ocsigen_server ; fi
-	if [ -f results/sizes/ml/js_of_ocaml ] ; then echo 171361 > results/sizes/ml/js_of_ocaml ; fi
-	if [ -f results/sizes/ml/boulderdash ] ; then echo 12920 > results/sizes/ml/boulderdash ; fi
-	if [ -f results/sizes/ml/canvas ] ; then echo 740 > results/sizes/ml/canvas ; fi
-	if [ -f results/sizes/ml/cubes ] ; then echo 3773 > results/sizes/ml/cubes ; fi
-	if [ -f results/sizes/ml/minesweeper ] ; then echo 7106 > results/sizes/ml/minesweeper ; fi
-	if [ -f results/sizes/ml/planet ] ; then echo 16488 > results/sizes/ml/planet ; fi
-	if [ -f results/sizes/ml/sudoku ] ; then echo 2837 > results/sizes/ml/sudoku ; fi
+	if [ ! -f results/sizes/ml/ocamlc ] ; then echo 800771 > results/sizes/ml/ocamlc ; fi
+	if [ ! -f results/sizes/ml/js_of_ocaml ] ; then echo 171361 > results/sizes/ml/js_of_ocaml ; fi
+	if [ ! -f results/sizes/ml/boulderdash ] ; then echo 12920 > results/sizes/ml/boulderdash ; fi
+	if [ ! -f results/sizes/ml/cubes ] ; then echo 3773 > results/sizes/ml/cubes ; fi
+	if [ ! -f results/sizes/ml/minesweeper ] ; then echo 7106 > results/sizes/ml/minesweeper ; fi
+	if [ ! -f results/sizes/ml/planet ] ; then echo 16488 > results/sizes/ml/planet ; fi
 	touch __missingsizes
 
 # To generate SVG, we first need to run the benchs,
 # then to add data for precompiled programs
 time.svg: __run
 	$(REPORT) -config report-time.config \
-	 -omit binary_trees -omit fannkuch_redux -omit loop \
+	 -omit binary_trees \
+	 -omit fannkuch_redux \
+	 -omit loop \
 	 -max 5.5 -svg 7 500 150 -edgecaption -ylabel "Execution time" \
 	 > $@
 
@@ -95,64 +102,142 @@ size.svg: size.gpl
 
 size.gpl: __run __missingsizes
 	$(REPORT) -config report-size.config \
-	 -omit binary_trees -omit fannkuch_redux -omit loop \
+	 -omit binary_trees \
+	 -omit fannkuch_redux \
 	 -omit fannkuch_redux_2 \
-	 -omit boyer_no_exc -omit kb_no_exc \
+	 -omit boyer_no_exc \
+	 -omit kb_no_exc \
+	 -omit loop \
 	 -append boulderdash \
-	 -append canvas \
 	 -append cubes \
 	 -append minesweeper \
 	 -append planet \
-	 -append sudoku \
 	 -append js_of_ocaml \
-	 -append ocsigen_server \
 	 -append ocamlc \
-	 -append unison \
-	 -max 3 -ylabel Size -script \
+	 -max 4.5 -ylabel Size -script \
 	 -svg 7 650 150 \
-	| perl -pe 'BEGIN{undef $$/;} s/e\nplot/e\nset key at 23.75,1.80\nplot/smg' \
+	| perl -pe 'BEGIN{undef $$/;} s/e\nplot/e\nset key at 19.83,2.87\nplot/smg' \
 	 > $@
+# You'll need to adjust the perl invocation above to align the "Generated code" caption
+
 
 time-optim.svg: __run
 	$(REPORT) -config report-time-optim.config \
-	 -omit binary_trees -omit fannkuch_redux -omit loop \
+	 -omit binary_trees \
+	 -omit fannkuch_redux \
 	 -omit fannkuch_redux_2 \
-	 -max 4 -svg 7 400 150 -edgecaption -ylabel "Execution time" \
+	 -omit loop \
+	 -max 2.5 -svg 7 400 150 -edgecaption -ylabel "Execution time" \
 	 > $@
 
 size-optim.svg: __run __missingsizes
 	$(REPORT) -config report-size-optim.config \
-	 -omit binary_trees -omit fannkuch_redux -omit loop  \
+	 -omit binary_trees \
+	 -omit fannkuch_redux \
 	 -omit fannkuch_redux_2 \
-	 -omit boyer_no_exc -omit kb_no_exc \
+	 -omit boyer_no_exc \
+	 -omit kb_no_exc \
+	 -omit loop \
 	 -append boulderdash \
-	 -append canvas \
 	 -append cubes \
 	 -append minesweeper \
 	 -append planet \
-	 -append sudoku \
 	 -append js_of_ocaml \
-	 -append ocsigen_server \
 	 -append ocamlc \
-	 -append unison \
 	 -max 2.5 -svg 7 650 150 -edgecaption -ylabel Size \
+	 > $@
+
+time-effects.svg: __run_effects
+	$(REPORT) -config report-time-effects.config \
+	 -omit binary_trees \
+	 -omit fannkuch_redux \
+	 -omit fannkuch_redux_2 \
+	 -omit loop \
+	 -omit boulderdash \
+	 -omit cubes \
+	 -omit minesweeper \
+	 -omit planet \
+	 -omit ocamlc \
+	 -min 0.5 -max 1.5 -svg 7 400 150 -edgecaption -ylabel "Execution time" \
+	 > $@
+
+size-effects.svg: __run_effects
+	$(REPORT) -config report-size-effects.config \
+	 -omit binary_trees \
+	 -omit fannkuch_redux \
+	 -omit fannkuch_redux_2 \
+	 -omit boyer_no_exc \
+	 -omit kb_no_exc \
+	 -omit loop \
+	 -append boulderdash \
+	 -append cubes \
+	 -append minesweeper \
+	 -append planet \
+	 -append js_of_ocaml \
+	 -append ocamlc \
+	 -min 0.8 -max 1.25 -svg 7 650 150 -edgecaption -ylabel Size \
+	 > $@
+
+size-gzipped-effects.svg: __run_effects
+	$(REPORT) -config report-size-gzipped-effects.config \
+	 -omit binary_trees \
+	 -omit fannkuch_redux \
+	 -omit fannkuch_redux_2 \
+	 -omit boyer_no_exc \
+	 -omit kb_no_exc \
+	 -omit loop \
+	 -append boulderdash \
+	 -append cubes \
+	 -append minesweeper \
+	 -append planet \
+	 -append js_of_ocaml \
+	 -append ocamlc \
+	 -max 1.2 -min 0.8 -svg 7 650 150 -edgecaption -ylabel Size \
+	 > $@
+
+size-bzip2-effects.svg: __run_effects
+	$(REPORT) -config report-size-bzip2-effects.config \
+	 -omit binary_trees \
+	 -omit fannkuch_redux \
+	 -omit fannkuch_redux_2 \
+	 -omit boyer_no_exc \
+	 -omit kb_no_exc \
+	 -omit loop \
+	 -append boulderdash \
+	 -append cubes \
+	 -append minesweeper \
+	 -append planet \
+	 -append js_of_ocaml \
+	 -append ocamlc \
+	 -max 1.1 -min 0.95 -svg 7 650 150 -edgecaption -ylabel Size \
 	 > $@
 
 compiletime.svg: __run __precomp __missingcompiletimes
 	$(REPORT) -config report-compiletime.config \
-	 -omit binary_trees -omit fannkuch_redux -omit loop \
+	 -omit binary_trees \
+	 -omit fannkuch_redux \
+	 -omit loop \
 	 -max 2 -svg 7 500 150 -edgecaption -ylabel "Compile time" \
 	 > $@
 
 nativejs.svg: __run
 	$(REPORT) -config report-nativejs.config \
-	 -omit binary_trees -omit fannkuch_redux -omit loop \
+	 -omit binary_trees \
+	 -omit fannkuch_redux \
+	 -omit loop \
 	 -max 2.8 -svg 7 200 150 -edgecaption -ylabel "Execution time" \
 	 > $@
 
 
 %.pdf: %.svg
-	inkscape -D --export-pdf="$@" -w 210 -h 297 $<
+	inkscape -D --export-type="pdf" --export-filename="$@" -w 210 -h 297 $<
+
+
+nativejs.png: nativejs.svg
+	inkscape -D -o "$@" -w 500 $<
+
+%.png: %.svg
+	inkscape -D -o "$@" -w 1024 $<
 
 _perf:
 	for i in /sys/devices/system/cpu/cpu* ; \
@@ -172,4 +257,15 @@ _noperf:
 
 
 clean: _noperf
-	rm -rf results build __precomp __run *.svg *.pdf *~ precomptmp __missingsizes __missingcompiletimes
+	rm -rf results build __precomp __run __run_effects *.svg *.pdf *~ precomptmp __missingsizes __missingcompiletimes
+
+
+copy-extra-bc:
+	mkdir -p programs
+	dune exec ./stripdebug.exe -- $(shell which ocamlc.byte) programs/ocamlc
+	dune build --profile bench_no_debug ../compiler/bin-js_of_ocaml/js_of_ocaml.bc ../examples/
+	cp -f ../_build/default/compiler/bin-js_of_ocaml/js_of_ocaml.bc programs/js_of_ocaml
+	cp -f ../_build/default/examples/boulderdash/boulderdash.bc programs/boulderdash
+	cp -f ../_build/default/examples/cubes/cubes.bc programs/cubes
+	cp -f ../_build/default/examples/minesweeper/main.bc programs/minesweeper
+	cp -f ../_build/default/examples/planet/planet.bc programs/planet

@@ -17,15 +17,11 @@
  (action
   (run
    %{bin:js_of_ocaml}
-   -I
-   .
    --export
    %{dep:export.txt}
    --toplevel
    --disable
    shortvar
-   +toplevel.js
-   +dynlink.js
    %{dep:test_toplevel.bc}
    -o
    %{targets})))

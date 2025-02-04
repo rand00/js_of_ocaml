@@ -21,7 +21,7 @@
 open! Js_of_ocaml_compiler.Stdlib
 open Js_of_ocaml_compiler
 
-let _ =
+let () =
   Sys.catch_break true;
   let argv = Jsoo_cmdline.normalize_argv ~warn:(warn "%s") Sys.argv in
   let argv =
@@ -109,7 +109,9 @@ let _ =
         comp;
       exit 1
   | Failure s ->
+      let backtrace = Printexc.get_backtrace () in
       Format.eprintf "%s: Error: %s@." Sys.argv.(0) s;
+      prerr_string backtrace;
       exit 1
   | exc ->
       let backtrace = Printexc.get_backtrace () in

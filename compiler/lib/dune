@@ -5,19 +5,15 @@
  (libraries
   compiler-libs.common
   compiler-libs.bytecomp
-  bytes
   menhirLib
-  (select
-   source_map_io.ml
-   from
-   (yojson -> source_map_io.yojson.ml)
-   (-> source_map_io.unsupported.ml)))
+  sedlex
+  yojson)
  (flags
   (:standard -w -7-37 -safe-string))
  (preprocess
-  (pps ppx_optcomp_light)))
+  (pps ppx_optcomp_light sedlex.ppx)))
 
-(ocamllex js_lexer annot_lexer)
+(ocamllex annot_lexer)
 
 (menhir
  (modules js_parser)
@@ -27,11 +23,15 @@
   Js_token
   --explain
   --unused-token
+  TAnnot
+  --unused-token
   TComment
   --unused-token
   TCommentLineDirective
   --unused-token
-  TUnknown))
+  T_ERROR
+  --unused-token
+  T_AT))
 
 (menhir
  (modules annot_parser)

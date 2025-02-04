@@ -25,7 +25,8 @@ open Code
 let pure_expr pure_funs e =
   match e with
   | Block _ | Field _ | Closure _ | Constant _ -> true
-  | Apply (f, _l, exact) -> exact && Var.Set.mem f pure_funs
+  | Special (Alias_prim _) -> true
+  | Apply { f; exact; _ } -> exact && Var.Set.mem f pure_funs
   | Prim (p, _l) -> (
       match p with
       | Extern f -> Primitive.is_pure f
@@ -34,6 +35,7 @@ let pure_expr pure_funs e =
 let pure_instr pure_funs i =
   match i with
   | Let (_, e) -> pure_expr pure_funs e
+  | Event _ | Assign _ -> true
   | Set_field _ | Offset_ref _ | Array_set _ -> false
 
 (****)

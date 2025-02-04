@@ -1,23 +1,19 @@
 (executable
  (name main)
  (modules main)
- (libraries dynlink js_of_ocaml-toplevel)
+ (libraries dynlink js_of_ocaml-compiler.dynlink)
  (modes byte))
 
 (rule
  (target main.js)
- (deps plugin.cmo)
+ (deps plugin.cmo export)
  (action
   (run
    %{bin:js_of_ocaml}
    --dynlink
-   +dynlink.js
-   --toplevel
-   +toplevel.js
-   -I
-   ./
-   --file
-   ./plugin.cmo
+   --export
+   export
+   --pretty
    -o
    %{target}
    %{dep:main.bc})))
@@ -29,6 +25,7 @@
 
 (rule
  (target main.out)
+ (deps plugin.cmo)
  (action
   (with-outputs-to
    %{target}

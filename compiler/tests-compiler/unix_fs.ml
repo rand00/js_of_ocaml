@@ -136,7 +136,7 @@ in
 f (); Sys.chdir "/static"; f () |};
   [%expect {|
     File size: 3
-    Failure("unix_stat: not implemented")|}]
+    Failure("caml_unix_stat: not implemented")|}]
 
 let%expect_test "Unix.stat_dir" =
   compile_and_run
@@ -153,7 +153,7 @@ in
 f (); Sys.chdir "/static"; f () |};
   [%expect {|
     Found dir
-    Failure("unix_stat: not implemented")|}]
+    Failure("caml_unix_stat: not implemented")|}]
 
 let%expect_test "Unix.stat_symlink" =
   compile_and_run
@@ -179,8 +179,8 @@ f (); Sys.chdir "/static"; f () |};
   [%expect
     {|
     File size: 3
-    Failure("unix_symlink: not implemented")
-    Failure("unix_stat: not implemented")|}]
+    Failure("caml_unix_symlink: not implemented")
+    Failure("caml_unix_stat: not implemented")|}]
 
 let%expect_test "Unix.symlink_Unix.readlink" =
   compile_and_run
@@ -206,8 +206,8 @@ f (); Sys.chdir "/static"; f () |};
   [%expect
     {|
     bbb
-    Failure("unix_symlink: not implemented")
-    Failure("unix_readlink: not implemented")|}]
+    Failure("caml_unix_symlink: not implemented")
+    Failure("caml_unix_readlink: not implemented")|}]
 
 let%expect_test "Unix.readlink_EINVAL" =
   compile_and_run
@@ -225,7 +225,7 @@ in
 f (); Sys.chdir "/static"; f () |};
   [%expect {|
     EXPECTED ERROR
-    Failure("unix_readlink: not implemented")|}]
+    Failure("caml_unix_readlink: not implemented")|}]
 
 let%expect_test "Unix.lstat_file" =
   compile_and_run
@@ -247,7 +247,7 @@ in
 f (); Sys.chdir "/static"; f () |};
   [%expect {|
     File size: 3
-    Failure("unix_lstat: not implemented")|}]
+    Failure("caml_unix_lstat: not implemented")|}]
 
 let%expect_test "Unix.lstat_symlink" =
   compile_and_run
@@ -270,5 +270,179 @@ f (); Sys.chdir "/static"; f () |};
   [%expect
     {|
     Found link
-    Failure("unix_symlink: not implemented")
-    Failure("unix_lstat: not implemented")|}]
+    Failure("caml_unix_symlink: not implemented")
+    Failure("caml_unix_lstat: not implemented")|}]
+
+let%expect_test "Unix.opendir" =
+  compile_and_run
+    ~unix:true
+    {|
+
+let stable_name = Hashtbl.create 17
+let reset_stable_name () = Hashtbl.clear stable_name
+let name s = match Hashtbl.find stable_name s with
+    | exception Not_found ->
+      let nname = Printf.sprintf "<file %d>" (Hashtbl.length stable_name + 1) in
+      Hashtbl.add stable_name s nname;
+      nname
+    | nname -> nname
+let norm = function
+    | Unix.Unix_error (t,n,_) -> Unix.Unix_error (t,n,"<PATH>")
+    | e -> e
+let read dh = print_endline (name (Unix.readdir dh))
+let fail f dh = try ignore (f dh); failwith "Failure expected"  with e -> print_endline (Printexc.to_string (norm e))
+let f () =
+  reset_stable_name ();
+  try
+    Sys.mkdir "aaa" 0o777;
+    print_endline "directory created";
+    let oc = open_out (Filename.concat "aaa" "bbb") in
+    close_out oc;
+    let oc = open_out (Filename.concat "aaa" "ccc") in
+    close_out oc;
+    print_endline "files created";
+    let dh = Unix.opendir "aaa" in
+    print_endline "got directory handle";
+    read dh;
+    read dh;
+    fail Unix.readdir dh;
+    Unix.rewinddir dh;
+    read dh;
+    read dh;
+    fail Unix.readdir  dh;
+    Unix.rewinddir dh;
+    read dh;
+    Unix.rewinddir dh;
+    read dh;
+    Unix.rewinddir dh;
+    read dh;
+    Unix.rewinddir dh;
+    read dh;
+    Unix.closedir dh;
+    fail Unix.rewinddir dh;
+    fail Unix.readdir dh;
+    Sys.remove "aaa/bbb";
+    Sys.remove "aaa/ccc";
+    Sys.rmdir "aaa"
+  with e -> print_endline  ("Error: " ^ Printexc.to_string (norm e))
+let () = f (); Sys.chdir "/static"; f () |};
+  [%expect
+    {|
+    directory created
+    files created
+    got directory handle
+    <file 1>
+    <file 2>
+    End_of_file
+    <file 1>
+    <file 2>
+    End_of_file
+    <file 1>
+    <file 1>
+    <file 1>
+    <file 1>
+    Unix.Unix_error(Unix.EBADF, "closedir", "<PATH>")
+    Unix.Unix_error(Unix.EBADF, "readdir", "<PATH>")
+    directory created
+    files created
+    got directory handle
+    <file 1>
+    <file 2>
+    End_of_file
+    <file 1>
+    <file 2>
+    End_of_file
+    <file 1>
+    <file 1>
+    <file 1>
+    <file 1>
+    Unix.Unix_error(Unix.EBADF, "closedir", "<PATH>")
+    Unix.Unix_error(Unix.EBADF, "readdir", "<PATH>") |}]
+
+let%expect_test "Unix.opendir - empty path" =
+  compile_and_run
+    ~unix:true
+    {|
+
+let stable_name = Hashtbl.create 17
+let reset_stable_name () = Hashtbl.clear stable_name
+let name s = match Hashtbl.find stable_name s with
+    | exception Not_found ->
+      let nname = Printf.sprintf "<file %d>" (Hashtbl.length stable_name + 1) in
+      Hashtbl.add stable_name s nname;
+      nname
+    | nname -> nname
+let norm = function
+    | Unix.Unix_error (t,n,_) -> Unix.Unix_error (t,n,"<PATH>")
+    | e -> e
+let read dh = print_endline (name (Unix.readdir dh))
+let fail f dh = try ignore (f dh); failwith "Failure expected"  with e -> print_endline (Printexc.to_string (norm e))
+let f () =
+  reset_stable_name ();
+  try
+    Sys.mkdir "aaa" 0o777;
+    Sys.chdir "aaa";
+    print_endline "directory created";
+    let oc = open_out "bbb" in
+    close_out oc;
+    let oc = open_out "ccc" in
+    close_out oc;
+    print_endline "files created";
+    let dh = Unix.opendir "" in
+    print_endline "got directory handle";
+    read dh;
+    read dh;
+    fail Unix.readdir dh;
+    Unix.rewinddir dh;
+    read dh;
+    read dh;
+    fail Unix.readdir  dh;
+    Unix.rewinddir dh;
+    read dh;
+    Unix.rewinddir dh;
+    read dh;
+    Unix.rewinddir dh;
+    read dh;
+    Unix.rewinddir dh;
+    read dh;
+    Unix.closedir dh;
+    fail Unix.rewinddir dh;
+    fail Unix.readdir dh;
+    Sys.remove "bbb";
+    Sys.remove "ccc";
+    Sys.chdir "..";
+    Sys.rmdir "aaa"
+  with e -> print_endline  ("Error: " ^ Printexc.to_string (norm e))
+let () = f (); Sys.chdir "/static"; f () |};
+  [%expect
+    {|
+    directory created
+    files created
+    got directory handle
+    <file 1>
+    <file 2>
+    End_of_file
+    <file 1>
+    <file 2>
+    End_of_file
+    <file 1>
+    <file 1>
+    <file 1>
+    <file 1>
+    Unix.Unix_error(Unix.EBADF, "closedir", "<PATH>")
+    Unix.Unix_error(Unix.EBADF, "readdir", "<PATH>")
+    directory created
+    files created
+    got directory handle
+    <file 1>
+    <file 2>
+    End_of_file
+    <file 1>
+    <file 2>
+    End_of_file
+    <file 1>
+    <file 1>
+    <file 1>
+    <file 1>
+    Unix.Unix_error(Unix.EBADF, "closedir", "<PATH>")
+    Unix.Unix_error(Unix.EBADF, "readdir", "<PATH>") |}]

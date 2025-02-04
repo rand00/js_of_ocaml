@@ -20,20 +20,52 @@
 
 type profile
 
+type optimized_result =
+  { program : Code.program
+  ; variable_uses : Deadcode.variable_uses
+  ; trampolined_calls : Effects.trampolined_calls
+  ; in_cps : Effects.in_cps
+  ; deadcode_sentinal : Code.Var.t
+  }
+
+val optimize : profile:profile -> Code.program -> optimized_result
+
 val f :
      ?standalone:bool
   -> ?wrap_with_fun:[ `Iife | `Anonymous | `Named of string ]
   -> ?profile:profile
-  -> ?dynlink:bool
-  -> ?linkall:bool
-  -> ?source_map:string option * Source_map.t
-  -> ?custom_header:string
+  -> link:[ `All | `All_from of string list | `Needed | `No ]
+  -> source_map:bool
+  -> formatter:Pretty_print.t
+  -> Parse_bytecode.Debug.t
+  -> Code.program
+  -> Source_map.info
+
+val f' :
+     ?standalone:bool
+  -> ?wrap_with_fun:[ `Iife | `Anonymous | `Named of string ]
+  -> ?profile:profile
+  -> link:[ `All | `All_from of string list | `Needed | `No ]
   -> Pretty_print.t
   -> Parse_bytecode.Debug.t
   -> Code.program
   -> unit
 
-val from_string : string array -> string -> Pretty_print.t -> unit
+val from_string :
+     prims:string array
+  -> debug:Instruct.debug_event list array
+  -> string
+  -> Pretty_print.t
+  -> unit
+
+val link_and_pack :
+     ?standalone:bool
+  -> ?wrap_with_fun:[ `Iife | `Anonymous | `Named of string ]
+  -> ?link:[ `All | `All_from of string list | `Needed | `No ]
+  -> Javascript.statement_list
+  -> Javascript.statement_list
+
+val configure : Pretty_print.t -> unit
 
 val profiles : (int * profile) list
 

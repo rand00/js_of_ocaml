@@ -14,13 +14,12 @@ let%expect_test _ =
     +array.js
     +backtrace.js
     +bigarray.js
-    +bigstring-base_bigstring.js
-    +bigstring-core_kernel.js
-    +bigstring-cstruct.js
     +bigstring.js
+    +blake2.js
     +compare.js
     +domain.js
     +dynlink.js
+    +effect.js
     +fail.js
     +format.js
     +fs.js
@@ -44,6 +43,7 @@ let%expect_test _ =
     +obj.js
     +parsing.js
     +prng.js
+    +runtime_events.js
     +stdlib.js
     +stdlib_modern.js
     +str.js
@@ -51,17 +51,19 @@ let%expect_test _ =
     +sys.js
     +toplevel.js
     +unix.js
-    +weak.js |}];
+    +weak.js
+    +zstd.js |}];
   printl runtime;
   [%expect
     {|
     +array.js
     +backtrace.js
     +bigarray.js
-    +bigstring-cstruct.js
     +bigstring.js
+    +blake2.js
     +compare.js
     +domain.js
+    +effect.js
     +fail.js
     +format.js
     +fs.js
@@ -85,17 +87,16 @@ let%expect_test _ =
     +obj.js
     +parsing.js
     +prng.js
+    +runtime_events.js
     +stdlib.js
     +str.js
     +sync.js
     +sys.js
     +unix.js
-    +weak.js |}];
+    +weak.js
+    +zstd.js |}];
   printl extra;
-  [%expect
-    {|
-    +bigstring-base_bigstring.js
-    +bigstring-core_kernel.js
+  [%expect {|
     +dynlink.js
     +stdlib_modern.js
     +toplevel.js |}]

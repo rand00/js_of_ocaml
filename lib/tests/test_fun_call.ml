@@ -19,7 +19,7 @@
 open Js_of_ocaml
 
 let s x =
-  let to_string : _ -> _ =
+  let to_string =
     Js.Unsafe.eval_string
       {|
 (function(x){
@@ -28,19 +28,19 @@ let s x =
     if(x === undefined)
       return "undefined"
     if(typeof x === "function")
-      return "function#" + x.length
+      return "function#" + x.length + "#" + x.l
     if(x.toString() == "[object Arguments]")
       return "(Arguments: " + Array.prototype.slice.call(x).toString() + ")";
     return x.toString()
 })
 |}
   in
-  Js.to_string (to_string x)
+  Js.to_string (Js.Unsafe.fun_call to_string [| Js.Unsafe.inject x |])
 
-let call_and_log f str =
-  let call : _ -> _ = Js.Unsafe.eval_string str in
-  let r = call f in
-  Printf.printf "Result: %s" (s r)
+let call_and_log f ?(cont = (Obj.magic Fun.id : _ -> _)) str =
+  let call = Js.Unsafe.eval_string str in
+  let r = Js.Unsafe.fun_call call [| Js.Unsafe.inject f |] in
+  Printf.printf "Result: %s" (s (cont r))
 
 let cb1 a = Printf.printf "got %s, done\n" (s a)
 
@@ -96,7 +96,7 @@ let%expect_test "partial application, 0 argument call is treated like 1 argument
 let%expect_test _ =
   let plus = Js.wrap_callback (fun a b -> a + b) in
   call_and_log plus {| (function(f){ return f(1) }) |};
-  [%expect {| Result: function#0 |}];
+  [%expect {| Result: function#0#undefined |}];
   call_and_log plus {| (function(f){ return f(1)(2) }) |};
   [%expect {| Result: 3 |}];
   call_and_log plus {| (function(f){ return f(1,2) }) |};
@@ -147,22 +147,24 @@ let%expect_test "wrap_callback_strict" =
     (Js.Unsafe.callback_with_arity 2 cb3)
     {| (function(f){ return f(1,2,3) }) |};
   [%expect {|
-    Result: function#0 |}];
+    Result: function#1#1 |}];
   call_and_log
     (Js.Unsafe.callback_with_arity 2 cb3)
-    {| (function(f){ return f(1,2,3)(4) }) |};
+    ~cont:(fun g -> g 4)
+    {| (function(f){ return f(1,2,3) }) |};
   [%expect {|
     got 1, 2, 4, done
     Result: 0 |}];
   call_and_log
     (Js.Unsafe.callback_with_arity 2 cb3)
-    {| (function(f){ return f(1,2)(3) }) |};
+    ~cont:(fun g -> g 3)
+    {| (function(f){ return f(1,2) }) |};
   [%expect {|
     got 1, 2, 3, done
     Result: 0 |}];
   call_and_log (Js.Unsafe.callback_with_arity 2 cb3) {| (function(f){ return f(1,2) }) |};
   [%expect {|
-    Result: function#0 |}]
+    Result: function#1#1 |}]
 
 let%expect_test "wrap_callback_strict" =
   call_and_log
@@ -236,7 +238,7 @@ let%expect_test "partial application, 0 argument call is treated 1 argument (und
 let%expect_test _ =
   let plus = Js.wrap_meth_callback (fun _ a b -> a + b) in
   call_and_log plus {| (function(f){ return f(1) }) |};
-  [%expect {| Result: function#0 |}];
+  [%expect {| Result: function#0#undefined |}];
   call_and_log plus {| (function(f){ return f(1)(2) }) |};
   [%expect {| Result: 3 |}];
   call_and_log plus {| (function(f){ return f(1,2) }) |};
@@ -289,23 +291,25 @@ let%expect_test "wrap_meth_callback_strict" =
     (Js.Unsafe.meth_callback_with_arity 2 cb4)
     {| (function(f){ return f.apply("this",[1,2,3]) }) |};
   [%expect {|
-    Result: function#0 |}];
+    Result: function#1#1 |}];
   call_and_log
     (Js.Unsafe.meth_callback_with_arity 2 cb4)
-    {| (function(f){ return f.apply("this",[1,2,3])(4) }) |};
+    ~cont:(fun g -> g 4)
+    {| (function(f){ return f.apply("this",[1,2,3]) }) |};
   [%expect {|
     got this, 1, 2, 4, done
     Result: 0 |}];
   call_and_log
     (Js.Unsafe.meth_callback_with_arity 2 cb4)
-    {| (function(f){ return f.apply("this",[1,2])(3) }) |};
+    ~cont:(fun g -> g 3)
+    {| (function(f){ return f.apply("this",[1,2]) }) |};
   [%expect {|
     got this, 1, 2, 3, done
     Result: 0 |}];
   call_and_log
     (Js.Unsafe.meth_callback_with_arity 2 cb4)
     {| (function(f){ return f.apply("this",[1,2]) }) |};
-  [%expect {| Result: function#0 |}]
+  [%expect {| Result: function#1#1 |}]
 
 let%expect_test "wrap_meth_callback_strict" =
   call_and_log
@@ -348,25 +352,24 @@ let%expect_test "partial application, extra arguments set to undefined" =
 (* caml_call_gen *)
 
 let%expect_test _ =
-  call_and_log cb3 {| (function(f){ return f(1) }) |};
+  call_and_log cb3 ~cont:(fun g -> g 1) {| (function(f){ return f }) |};
   [%expect {|
-    got 1, undefined, undefined, done
-    Result: 0 |}]
+    Result: function#2#2 |}]
 
 let%expect_test _ =
-  call_and_log cb3 {| (function(f){ return f(1,2,3,4) }) |};
+  call_and_log cb3 ~cont:(fun g -> g 1 2 3 4) {| (function(f){ return f }) |};
   [%expect {|
     got 1, 2, 3, done
     Result: 0 |}]
 
 let%expect_test _ =
   let f cb =
-    try call_and_log (cb 1) {| (function(f){ return f(1,2,3) }) |} with
+    try call_and_log (cb 1) ~cont:(fun g -> g 1 2 3) {| (function(f){ return f }) |} with
     | Invalid_argument s | Failure s -> Printf.printf "Error: %s" s
     | _ -> Printf.printf "Error: unknown"
   in
   f cb5;
-  [%expect {| Result: function#0 |}];
+  [%expect {| Result: function#1#1 |}];
   f cb4;
   [%expect {|
     got 1, 1, 2, 3, done
@@ -396,7 +399,19 @@ let%expect_test _ =
     Result: 0 |}];
   f (Obj.magic cb4);
   [%expect {|
-    Result: function#0 |}];
+    Result: function#1#1 |}];
   f (Obj.magic cb5);
   [%expect {|
-    Result: function#0 |}]
+    Result: function#2#2 |}]
+
+let%expect_test _ =
+  let open Js_of_ocaml in
+  let f = Js.wrap_callback (fun s -> print_endline s) in
+  Js.export "f" f;
+  let () =
+    Js.Unsafe.fun_call
+      (Js.Unsafe.pure_js_expr "jsoo_exports")##.f
+      [| Js.Unsafe.coerce (Js.string "hello") |]
+  in
+  ();
+  [%expect {| hello |}]

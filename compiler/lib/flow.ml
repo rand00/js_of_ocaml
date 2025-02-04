@@ -34,16 +34,25 @@ type def =
   | Expr of Code.expr
   | Param
 
-type info =
-  { info_defs : def array
-  ; info_known_origins : Code.Var.Set.t Code.Var.Tbl.t
-  ; info_maybe_unknown : bool Code.Var.Tbl.t
-  ; info_possibly_mutable : bool array
-  }
+module Info = struct
+  type t =
+    { info_defs : def array
+    ; info_known_origins : Code.Var.Set.t Code.Var.Tbl.t
+    ; info_maybe_unknown : bool Code.Var.Tbl.t
+    ; info_possibly_mutable : Var.ISet.t
+    }
 
-let update_def { info_defs; _ } x exp =
-  let idx = Code.Var.idx x in
-  info_defs.(idx) <- Expr exp
+  let def t x =
+    match t.info_defs.(Code.Var.idx x) with
+    | Phi _ | Param -> None
+    | Expr x -> Some x
+
+  let possibly_mutable t x = Code.Var.ISet.mem t.info_possibly_mutable x
+
+  let update_def { info_defs; _ } x exp =
+    let idx = Code.Var.idx x in
+    info_defs.(idx) <- Expr exp
+end
 
 let undefined = Phi Var.Set.empty
 
@@ -81,7 +90,8 @@ let rec arg_deps vars deps defs params args =
       add_dep deps x y;
       add_assign_def vars defs x y;
       arg_deps vars deps defs params args
-  | _ -> ()
+  | [], [] -> ()
+  | _ -> assert false
 
 let cont_deps blocks vars deps defs (pc, args) =
   let block = Addr.Map.find pc blocks in
@@ -89,12 +99,12 @@ let cont_deps blocks vars deps defs (pc, args) =
 
 let expr_deps blocks vars deps defs x e =
   match e with
-  | Constant _ | Apply _ | Prim _ -> ()
+  | Constant _ | Apply _ | Prim _ | Special _ -> ()
   | Closure (l, cont) ->
       List.iter l ~f:(fun x -> add_param_def vars defs x);
       cont_deps blocks vars deps defs cont
-  | Block (_, a, _) -> Array.iter a ~f:(fun y -> add_dep deps x y)
-  | Field (y, _) -> add_dep deps x y
+  | Block (_, a, _, _) -> Array.iter a ~f:(fun y -> add_dep deps x y)
+  | Field (y, _, _) -> add_dep deps x y
 
 let program_deps { blocks; _ } =
   let nv = Var.count () in
@@ -109,20 +119,22 @@ let program_deps { blocks; _ } =
               add_var vars x;
               add_expr_def defs x e;
               expr_deps blocks vars deps defs x e
-          | Set_field _ | Array_set _ | Offset_ref _ -> ());
-      Option.iter block.handler ~f:(fun (x, cont) ->
-          add_param_def vars defs x;
-          cont_deps blocks vars deps defs cont);
+          | Assign (x, y) ->
+              add_dep deps x y;
+              add_assign_def vars defs x y
+          | Event _ | Set_field _ | Array_set _ | Offset_ref _ -> ());
       match block.branch with
       | Return _ | Raise _ | Stop -> ()
-      | Branch cont | Poptrap (cont, _) -> cont_deps blocks vars deps defs cont
+      | Branch cont | Poptrap cont -> cont_deps blocks vars deps defs cont
       | Cond (_, cont1, cont2) ->
           cont_deps blocks vars deps defs cont1;
           cont_deps blocks vars deps defs cont2
-      | Switch (_, a1, a2) ->
-          Array.iter a1 ~f:(fun cont -> cont_deps blocks vars deps defs cont);
-          Array.iter a2 ~f:(fun cont -> cont_deps blocks vars deps defs cont)
-      | Pushtrap (cont, _, _, _) -> cont_deps blocks vars deps defs cont)
+      | Switch (_, a1) ->
+          Array.iter a1 ~f:(fun cont -> cont_deps blocks vars deps defs cont)
+      | Pushtrap (cont, x, cont_h) ->
+          add_param_def vars defs x;
+          cont_deps blocks vars deps defs cont_h;
+          cont_deps blocks vars deps defs cont)
     blocks;
   vars, deps, defs
 
@@ -134,12 +146,13 @@ let propagate1 deps defs st x =
   | Phi s -> var_set_lift (fun y -> Var.Tbl.get st y) s
   | Expr e -> (
       match e with
-      | Constant _ | Apply _ | Prim _ | Closure _ | Block _ -> Var.Set.singleton x
-      | Field (y, n) ->
+      | Constant _ | Apply _ | Prim _ | Special _ | Closure _ | Block _ ->
+          Var.Set.singleton x
+      | Field (y, n, _) ->
           var_set_lift
             (fun z ->
               match defs.(Var.idx z) with
-              | Expr (Block (_, a, _)) when n < Array.length a ->
+              | Expr (Block (_, a, _, _)) when n < Array.length a ->
                   let t = a.(n) in
                   add_dep deps x t;
                   Var.Tbl.get st t
@@ -169,27 +182,30 @@ let solver1 vars deps defs =
 type mutability_state =
   { defs : def array
   ; known_origins : Code.Var.Set.t Code.Var.Tbl.t
-  ; may_escape : bool array
-  ; possibly_mutable : bool array
+  ; may_escape : Code.Var.ISet.t
+  ; possibly_mutable : Code.Var.ISet.t
   }
 
 let rec block_escape st x =
   Var.Set.iter
     (fun y ->
-      let idx = Var.idx y in
-      if not st.may_escape.(idx)
+      if not (Code.Var.ISet.mem st.may_escape y)
       then (
-        st.may_escape.(idx) <- true;
-        st.possibly_mutable.(idx) <- true;
+        Code.Var.ISet.add st.may_escape y;
         match st.defs.(Var.idx y) with
-        | Expr (Block (_, l, _)) -> Array.iter l ~f:(fun z -> block_escape st z)
-        | _ -> ()))
+        | Expr (Block (_, l, _, mut)) ->
+            (match mut with
+            | Immutable -> ()
+            | Maybe_mutable -> Code.Var.ISet.add st.possibly_mutable y);
+            Array.iter l ~f:(fun z -> block_escape st z)
+        | _ -> Code.Var.ISet.add st.possibly_mutable y))
     (Var.Tbl.get st.known_origins x)
 
 let expr_escape st _x e =
   match e with
-  | Constant _ | Closure _ | Block _ | Field _ -> ()
-  | Apply (_, l, _) -> List.iter l ~f:(fun x -> block_escape st x)
+  | Special _ | Constant _ | Closure _ | Block _ | Field _ -> ()
+  | Apply { args; _ } -> List.iter args ~f:(fun x -> block_escape st x)
+  | Prim (Array_get, [ Pv x; _ ]) -> block_escape st x
   | Prim ((Vectlength | Array_get | Not | IsInt | Eq | Neq | Lt | Le | Ult), _) -> ()
   | Prim (Extern name, l) ->
       let ka =
@@ -212,14 +228,18 @@ let expr_escape st _x e =
             | _, `Const | Pc _, _ -> ()
             | Pv v, `Shallow_const -> (
                 match st.defs.(Var.idx v) with
-                | Expr (Block (_, a, _)) -> Array.iter a ~f:(fun x -> block_escape st x)
+                | Expr (Constant (Tuple _)) -> ()
+                | Expr (Block (_, a, _, _)) ->
+                    Array.iter a ~f:(fun x -> block_escape st x)
                 | _ -> block_escape st v)
             | Pv v, `Object_literal -> (
                 match st.defs.(Var.idx v) with
-                | Expr (Block (_, a, _)) ->
+                | Expr (Constant (Tuple _)) -> ()
+                | Expr (Block (_, a, _, _)) ->
                     Array.iter a ~f:(fun x ->
                         match st.defs.(Var.idx x) with
-                        | Expr (Block (_, [| _k; v |], _)) -> block_escape st v
+                        | Expr (Block (_, [| _k; v |], _, _)) -> block_escape st v
+                        | Expr (Constant _) -> ()
                         | _ -> block_escape st x)
                 | _ -> block_escape st v)
             | Pv v, `Mutable -> block_escape st v);
@@ -228,23 +248,23 @@ let expr_escape st _x e =
       loop l ka
 
 let program_escape defs known_origins { blocks; _ } =
-  let nv = Var.count () in
-  let may_escape = Array.make nv false in
-  let possibly_mutable = Array.make nv false in
+  let may_escape = Var.ISet.empty () in
+  let possibly_mutable = Var.ISet.empty () in
   let st = { defs; known_origins; may_escape; possibly_mutable } in
   Addr.Map.iter
     (fun _ block ->
       List.iter block.body ~f:(fun i ->
           match i with
           | Let (x, e) -> expr_escape st x e
-          | Set_field (x, _, y) | Array_set (x, _, y) ->
+          | Event _ | Assign _ -> ()
+          | Set_field (x, _, _, y) | Array_set (x, _, y) ->
               Var.Set.iter
-                (fun y -> possibly_mutable.(Var.idx y) <- true)
+                (fun y -> Var.ISet.add possibly_mutable y)
                 (Var.Tbl.get known_origins x);
               block_escape st y
           | Offset_ref (x, _) ->
               Var.Set.iter
-                (fun y -> possibly_mutable.(Var.idx y) <- true)
+                (fun y -> Var.ISet.add possibly_mutable y)
                 (Var.Tbl.get known_origins x));
       match block.branch with
       | Return x | Raise (x, _) -> block_escape st x
@@ -260,15 +280,15 @@ let propagate2 ?(skip_param = false) defs known_origins possibly_mutable st x =
   | Phi s -> Var.Set.exists (fun y -> Var.Tbl.get st y) s
   | Expr e -> (
       match e with
-      | Constant _ | Closure _ | Apply _ | Prim _ | Block _ -> false
-      | Field (y, n) ->
+      | Constant _ | Closure _ | Apply _ | Prim _ | Block _ | Special _ -> false
+      | Field (y, n, _) ->
           Var.Tbl.get st y
           || Var.Set.exists
                (fun z ->
                  match defs.(Var.idx z) with
-                 | Expr (Block (_, a, _)) ->
+                 | Expr (Block (_, a, _, _)) ->
                      n >= Array.length a
-                     || possibly_mutable.(Var.idx z)
+                     || Var.ISet.mem possibly_mutable z
                      || Var.Tbl.get st a.(n)
                  | Phi _ | Param | Expr _ -> true)
                (Var.Tbl.get known_origins y))
@@ -289,7 +309,12 @@ let solver2 ?skip_param vars deps defs known_origins possibly_mutable =
   in
   Solver2.f () g (propagate2 ?skip_param defs known_origins possibly_mutable)
 
-let get_approx { info_defs = _; info_known_origins; info_maybe_unknown; _ } f top join x =
+let get_approx
+    { Info.info_defs = _; info_known_origins; info_maybe_unknown; _ }
+    f
+    top
+    join
+    x =
   let s = Var.Tbl.get info_known_origins x in
   if Var.Tbl.get info_maybe_unknown x
   then top
@@ -308,14 +333,44 @@ let the_def_of info x =
           match info.info_defs.(Var.idx x) with
           | Expr (Constant (Float _ | Int _ | NativeString _) as e) -> Some e
           | Expr (Constant (String _) as e) when Config.Flag.safe_string () -> Some e
-          | Expr e -> if info.info_possibly_mutable.(Var.idx x) then None else Some e
+          | Expr e -> if Var.ISet.mem info.info_possibly_mutable x then None else Some e
           | _ -> None)
         None
         (fun _ _ -> None)
         x
   | Pc c -> Some (Constant c)
 
-let the_const_of info x =
+(* If [constant_identical a b = true], then the two values cannot be
+   distinguished, i.e., they are not different objects (and [caml_js_equals a b
+   = true]) and if both are floats, they are bitwise equal. *)
+let constant_identical ~(target : [ `JavaScript | `Wasm ]) a b =
+  match a, b, target with
+  | Int i, Int j, _ -> Targetint.equal i j
+  | Float a, Float b, `JavaScript -> Float.bitwise_equal a b
+  | Float _, Float _, `Wasm -> false
+  | NativeString a, NativeString b, `JavaScript -> Native_string.equal a b
+  | NativeString _, NativeString _, `Wasm ->
+      false
+      (* Native strings are boxed (JavaScript objects) in Wasm and are
+          possibly different objects *)
+  | String a, String b, `JavaScript -> Config.Flag.use_js_string () && String.equal a b
+  | String _, String _, `Wasm ->
+      false (* Strings are boxed in Wasm and are possibly different objects *)
+  | Int32 _, Int32 _, `Wasm ->
+      false (* [Int32]s are boxed in Wasm and are possibly different objects *)
+  | Int32 _, Int32 _, `JavaScript -> assert false
+  | NativeInt _, NativeInt _, `Wasm ->
+      false (* [NativeInt]s are boxed in Wasm and are possibly different objects *)
+  | NativeInt _, NativeInt _, `JavaScript -> assert false
+  (* All other values may be distinct objects and thus different by [caml_js_equals]. *)
+  | Int64 _, Int64 _, _ -> false
+  | Tuple _, Tuple _, _ -> false
+  | Float_array _, Float_array _, _ -> false
+  | (Int _ | Float _ | Int64 _ | Int32 _ | NativeInt _), _, _ -> false
+  | (String _ | NativeString _), _, _ -> false
+  | (Float_array _ | Tuple _), _, _ -> false
+
+let the_const_of ~target info x =
   match x with
   | Pv x ->
       get_approx
@@ -325,43 +380,43 @@ let the_const_of info x =
           | Expr (Constant ((Float _ | Int _ | NativeString _) as c)) -> Some c
           | Expr (Constant (String _ as c)) when Config.Flag.safe_string () -> Some c
           | Expr (Constant c) ->
-              if info.info_possibly_mutable.(Var.idx x) then None else Some c
+              if Var.ISet.mem info.info_possibly_mutable x then None else Some c
           | _ -> None)
         None
         (fun u v ->
           match u, v with
-          | Some i, Some j when Poly.(Code.constant_equal i j = Some true) -> u
+          | Some i, Some j when constant_identical ~target i j -> u
           | _ -> None)
         x
   | Pc c -> Some c
 
-let the_int info x =
-  match the_const_of info x with
+let the_int ~target info x =
+  match the_const_of ~target info x with
   | Some (Int i) -> Some i
   | _ -> None
 
-let the_string_of info x =
-  match the_const_of info x with
+let the_string_of ~target info x =
+  match the_const_of info ~target x with
   | Some (String i) -> Some i
   | _ -> None
 
-let the_native_string_of info x =
-  match the_const_of info x with
+let the_native_string_of ~target info x =
+  match the_const_of ~target info x with
   | Some (NativeString i) -> Some i
   | _ -> None
 
 (*XXX Maybe we could iterate? *)
-let direct_approx info x =
+let direct_approx (info : Info.t) x =
   match info.info_defs.(Var.idx x) with
-  | Expr (Field (y, n)) ->
+  | Expr (Field (y, n, _)) ->
       get_approx
         info
         (fun z ->
-          if info.info_possibly_mutable.(Var.idx z)
+          if Var.ISet.mem info.info_possibly_mutable z
           then None
           else
             match info.info_defs.(Var.idx z) with
-            | Expr (Block (_, a, _)) when n < Array.length a -> Some a.(n)
+            | Expr (Block (_, a, _, _)) when n < Array.length a -> Some a.(n)
             | _ -> None)
         None
         (fun u v ->
@@ -371,20 +426,23 @@ let direct_approx info x =
         y
   | _ -> None
 
-let build_subst info vars =
+let build_subst (info : Info.t) vars =
   let nv = Var.count () in
-  let subst = Array.make nv None in
+  let subst = Array.init nv ~f:(fun i -> Var.of_idx i) in
   Var.ISet.iter
     (fun x ->
+      let x_idx = Var.idx x in
       let u = Var.Tbl.get info.info_maybe_unknown x in
       (if not u
-      then
-        let s = Var.Tbl.get info.info_known_origins x in
-        if Var.Set.cardinal s = 1 then subst.(Var.idx x) <- Some (Var.Set.choose s));
-      if Option.is_none subst.(Var.idx x) then subst.(Var.idx x) <- direct_approx info x;
-      match subst.(Var.idx x) with
-      | None -> ()
-      | Some y -> Var.propagate_name x y)
+       then
+         let s = Var.Tbl.get info.info_known_origins x in
+         if Var.Set.cardinal s = 1 then subst.(x_idx) <- Var.Set.choose s);
+      (if Var.equal subst.(x_idx) x
+       then
+         match direct_approx info x with
+         | None -> ()
+         | Some y -> subst.(x_idx) <- y);
+      if Var.equal subst.(x_idx) x then () else Var.propagate_name x subst.(x_idx))
     vars;
   subst
 
@@ -422,7 +480,7 @@ let f ?skip_param p =
       vars;
   let t5 = Timer.make () in
   let info =
-    { info_defs = defs
+    { Info.info_defs = defs
     ; info_known_origins = known_origins
     ; info_maybe_unknown = maybe_unknown
     ; info_possibly_mutable = possibly_mutable

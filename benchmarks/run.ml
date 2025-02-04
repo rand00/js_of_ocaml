@@ -34,7 +34,7 @@ module Param = struct
     { warm_up_time = 1.0
     ; min_measures = 10
     ; max_confidence = 0.03
-    ; max_duration = 5.
+    ; max_duration = 20.
     ; verbose = false
     }
 
@@ -99,7 +99,9 @@ let need_more ~print (param : Param.t) l =
 let warm_up (param : Param.t) cmd =
   let t = ref 0. in
   while !t < param.warm_up_time do
-    let t' = time ~verbose:param.verbose cmd in
+    let t' =
+      time ~verbose:param.verbose (Printf.sprintf "timeout %f %s" param.max_duration cmd)
+    in
     if t' > param.max_duration
     then failwith (Printf.sprintf "Warmup took too long %.1fs" t');
     t := !t +. t'
@@ -152,12 +154,23 @@ let compr_file_size param =
   compile_no_ext param ~comptime:false (fun ~src ~dst ->
       Format.sprintf "sed 's/^ *//g' %s | gzip -c | wc -c > %s" src dst)
 
-(* let runtime_size = *)
-(*   compile_no_ext ~comptime:false (Format.sprintf "head -n -1 %s | wc -c > %s") *)
+let bzip2_file_size param =
+  compile_no_ext param ~comptime:false (fun ~src ~dst ->
+      Format.sprintf "sed 's/^ *//g' %s | bzip2 -c | wc -c > %s" src dst)
+
+let runtime_size param =
+  compile_no_ext param ~comptime:false (fun ~src ~dst ->
+      Format.sprintf
+        {|awk -vRS="--MARK--start-of-jsoo-gen--MARK--" '{print length($0)}' %s | head -n1  > %s|}
+        src
+        dst)
 
 let gen_size param =
   compile_no_ext param ~comptime:false (fun ~src ~dst ->
-      Format.sprintf "tail -1 %s | wc -c > %s" src dst)
+      Format.sprintf
+        {|awk -vRS="--MARK--start-of-jsoo-gen--MARK--" '{print length($0)}' %s | tail -n1 > %s|}
+        src
+        dst)
 
 (****)
 
@@ -198,8 +211,8 @@ let read_config file =
 let _ =
   let compile_only = ref false in
   let full = ref false in
+  let effects = ref false in
   let conf_file = ref "run.config" in
-  let do_ocamljs = ref true in
   let nobyteopt = ref false in
   let param = ref Param.default in
   let fast_run () = param := Param.fast !param in
@@ -208,11 +221,11 @@ let _ =
   let options =
     [ "-compile", Arg.Set compile_only, " only compiles"
     ; "-all", Arg.Set full, " run all benchmarks"
+    ; "-effects", Arg.Set effects, " only run with and without effect handler support"
     ; "-config", Arg.Set_string conf_file, "<file> use <file> as a config file"
     ; "-fast", Arg.Unit fast_run, " perform less iterations"
     ; "-ffast", Arg.Unit ffast_run, " perform very few iterations"
     ; "-verbose", Arg.Unit verbose, " verbose"
-    ; "-noocamljs", Arg.Clear do_ocamljs, " do not run ocamljs"
     ; ( "-nobyteopt"
       , Arg.Set nobyteopt
       , " do not run benchs on bytecode and native programs" )
@@ -222,28 +235,35 @@ let _ =
     (Arg.align options)
     (fun s -> raise (Arg.Bad (Format.sprintf "unknown option `%s'" s)))
     (Format.sprintf "Usage: %s [options]" Sys.argv.(0));
-  let run_ocamljs = !do_ocamljs && Sys.command "ocamljs 2> /dev/null" = 0 in
   let conf_file = !conf_file in
   let compile_only = !compile_only in
   let nobyteopt = !nobyteopt in
   let full = !full in
+  let effects = !effects in
   let param = !param in
   let interpreters = read_config conf_file in
   let compile = compile param ~comptime:true in
-  let compile_jsoo opts = compile (Format.sprintf "js_of_ocaml -q %s" opts) in
+  let compile_jsoo ?(effects = false) opts =
+    compile
+      (Format.sprintf
+         "js_of_ocaml -q --target-env browser --debug mark-runtime-gen %s %s"
+         opts
+         (if effects then "--enable=effects" else "--disable=effects"))
+  in
   Format.eprintf "Compile@.";
   compile "ocamlc" src Spec.ml code Spec.byte;
   compile "ocamlopt" src Spec.ml code Spec.opt;
   compile_jsoo "" code Spec.byte code Spec.js_of_ocaml;
+  compile_jsoo "--opt=3" code Spec.byte code Spec.js_of_ocaml_o3;
+  compile_jsoo "--enable=use-js-string" code Spec.byte code Spec.js_of_ocaml_js_string;
   compile_jsoo "--disable inline" code Spec.byte code Spec.js_of_ocaml_inline;
   compile_jsoo "--disable deadcode" code Spec.byte code Spec.js_of_ocaml_deadcode;
   compile_jsoo "--disable compact" code Spec.byte code Spec.js_of_ocaml_compact;
   compile_jsoo "--disable optcall" code Spec.byte code Spec.js_of_ocaml_call;
-  if run_ocamljs then compile "ocamljs" src Spec.ml code Spec.ocamljs;
+  compile_jsoo ~effects:true "" code Spec.byte code Spec.js_of_ocaml_effects;
   compile "ocamlc -unsafe" src Spec.ml code Spec.byte_unsafe;
   compile "ocamlopt" src Spec.ml code Spec.opt_unsafe;
   compile_jsoo "" code Spec.byte_unsafe code Spec.js_of_ocaml_unsafe;
-  if run_ocamljs then compile "ocamljs -unsafe" src Spec.ml code Spec.ocamljs_unsafe;
   Format.eprintf "Sizes@.";
   ml_size param src Spec.ml sizes Spec.ml;
   file_size param code Spec.byte sizes Spec.byte;
@@ -254,13 +274,38 @@ let _ =
     Spec.js_of_ocaml
     sizes
     (Spec.sub_spec Spec.js_of_ocaml "gzipped");
-  (* runtime_size param code Spec.js_of_ocaml sizes (Spec.sub_spec Spec.js_of_ocaml "runtime"); *)
+  compr_file_size
+    param
+    code
+    Spec.js_of_ocaml_effects
+    sizes
+    (Spec.sub_spec Spec.js_of_ocaml_effects "gzipped");
+  bzip2_file_size
+    param
+    code
+    Spec.js_of_ocaml_effects
+    sizes
+    (Spec.sub_spec Spec.js_of_ocaml_effects "bzip2");
+  bzip2_file_size
+    param
+    code
+    Spec.js_of_ocaml
+    sizes
+    (Spec.sub_spec Spec.js_of_ocaml "bzip2");
+  runtime_size
+    param
+    code
+    Spec.js_of_ocaml
+    sizes
+    (Spec.sub_spec Spec.js_of_ocaml "runtime");
   gen_size param code Spec.js_of_ocaml sizes (Spec.sub_spec Spec.js_of_ocaml "generated");
+  gen_size param code Spec.js_of_ocaml_o3 sizes Spec.js_of_ocaml_o3;
+  gen_size param code Spec.js_of_ocaml_js_string sizes Spec.js_of_ocaml_js_string;
   gen_size param code Spec.js_of_ocaml_inline sizes Spec.js_of_ocaml_inline;
   gen_size param code Spec.js_of_ocaml_deadcode sizes Spec.js_of_ocaml_deadcode;
   gen_size param code Spec.js_of_ocaml_compact sizes Spec.js_of_ocaml_compact;
   gen_size param code Spec.js_of_ocaml_call sizes Spec.js_of_ocaml_call;
-  if run_ocamljs then compr_file_size param code Spec.ocamljs sizes Spec.ocamljs;
+  gen_size param code Spec.js_of_ocaml_effects sizes Spec.js_of_ocaml_effects;
   if compile_only then exit 0;
   Format.eprintf "Measure@.";
   if not nobyteopt
@@ -272,14 +317,21 @@ let _ =
     then
       ( interpreters
       , [ Some Spec.js_of_ocaml
+        ; Some Spec.js_of_ocaml_o3
+        ; Some Spec.js_of_ocaml_js_string
         ; Some Spec.js_of_ocaml_unsafe
         ; Some Spec.js_of_ocaml_inline
         ; Some Spec.js_of_ocaml_deadcode
         ; Some Spec.js_of_ocaml_compact
         ; Some Spec.js_of_ocaml_call
-        ; (if run_ocamljs then Some Spec.ocamljs else None)
-        ; (if run_ocamljs then Some Spec.ocamljs_unsafe else None)
+        ; Some Spec.js_of_ocaml_effects
         ] )
+    else if effects
+    then
+      ( (match interpreters with
+        | i :: _ -> [ i ]
+        | [] -> [])
+      , [ Some Spec.js_of_ocaml; Some Spec.js_of_ocaml_effects ] )
     else
       ( (match interpreters with
         | i :: _ -> [ i ]

@@ -21,59 +21,56 @@ open Js
 open Dom_html
 open! Import
 
-class type ['a, 'b] worker =
-  object ('self)
-    inherit eventTarget
+class type ['a, 'b] worker = object ('self)
+  inherit eventTarget
 
-    method onerror : ('self t, errorEvent t) event_listener writeonly_prop
+  method onerror : ('self t, errorEvent t) event_listener writeonly_prop
 
-    method onmessage : ('self t, 'b messageEvent t) event_listener writeonly_prop
+  method onmessage : ('self t, 'b messageEvent t) event_listener writeonly_prop
 
-    method postMessage : 'a -> unit meth
+  method postMessage : 'a -> unit meth
 
-    method terminate : unit meth
-  end
+  method terminate : unit meth
+end
 
-and errorEvent =
-  object
-    inherit event
+and errorEvent = object
+  inherit event
 
-    method message : js_string t readonly_prop
+  method message : js_string t readonly_prop
 
-    method filename : js_string t readonly_prop
+  method filename : js_string t readonly_prop
 
-    method lineno : int readonly_prop
+  method lineno : int readonly_prop
 
-    method colno : int readonly_prop
+  method colno : int readonly_prop
 
-    method error : Unsafe.any readonly_prop
-  end
+  method error : Unsafe.any readonly_prop
+end
 
-and ['a] messageEvent =
-  object
-    inherit event
+and ['a] messageEvent = object
+  inherit event
 
-    method data : 'a readonly_prop
-  end
+  method data : 'a readonly_prop
+end
 
 let worker = Unsafe.global##._Worker
 
 let create script = new%js worker (string script)
 
 let import_scripts scripts : unit =
-  if Unsafe.global##.importScripts == undefined
+  if not (Js.Optdef.test Unsafe.global##.importScripts)
   then invalid_arg "Worker.import_scripts is undefined";
   Unsafe.fun_call
     Unsafe.global##.importScripts
     (Array.map (fun s -> Unsafe.inject (string s)) (Array.of_list scripts))
 
 let set_onmessage handler =
-  if Unsafe.global##.onmessage == undefined
+  if not (Js.Optdef.test Unsafe.global##.onmessage)
   then invalid_arg "Worker.onmessage is undefined";
   let js_handler (ev : 'a messageEvent Js.t) = handler ev##.data in
   Unsafe.global##.onmessage := wrap_callback js_handler
 
 let post_message msg =
-  if Unsafe.global##.postMessage == undefined
+  if not (Js.Optdef.test Unsafe.global##.postMessage)
   then invalid_arg "Worker.onmessage is undefined";
   Unsafe.global##postMessage msg

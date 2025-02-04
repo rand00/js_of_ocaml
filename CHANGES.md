@@ -1,21 +1,310 @@
-# dev (2022-??) - ??
+# Dev
+
 ## Features/Changes
-* Compiler: initial support for OCaml 5 (#1265)
+* Compiler: add mechanism to deprecate runtime promitives
+* Runtime: re-introduce caml_new_string, marked as deprecated
+
+# 5.9.0 (2024-11-22) - Lille
+
+## Features/Changes
+* Misc: update testsuite to OCaml 5.2
+* Misc: CI uses opam.2.2 and no longer use sunset repo
+* Misc: yojson is no longer optional
+* Misc: reduce the diff with the wasm_of_ocaml fork
+* Misc: finalize support for OCaml 5.3
+* Compiler: speedup global_flow/global_deadcode pass on large bytecode
+* Compiler: improved global dead code elimination (#2206)
+* Compiler: speedup json parsing, relying on Yojson.Raw (#1640)
+* Compiler: Decode sourcemap mappings only when necessary (#1664)
+* Compiler: mark [TextEncoder] as reserved
+* Compiler: add support for the Wasm backend in parts of the pipeline, in
+  prevision for the merge of wasm_of_ocaml
+* Compiler: introduce a Targetint module
+  that follows the semantic of the backend (js or wasm)
+* Compiler: warn on joo_global_object
+* Compiler: revisit static env handling (#1708)
+* Compiler: Emit index source_map to avoid changing mappings (#1714, #1715)
+* Compiler: improved source map generation (#1716)
+* Runtime: change Sys.os_type on windows (Cygwin -> Win32)
+* Runtime: backtraces are really expensive, they need to be explicitly
+  requested at compile time (--enable with-js-error) or at startup (OCAMLRUNPARAM=b=1)
+* Runtime: allow dynlink of precompiled js with separate compilation (#1676)
+* Runtime: reimplement the runtime of weak and ephemeron (#1707)
+* Lib: Modify Typed_array API for compatibility with WebAssembly
+* Lib: add details element and toggle event (#1728)
+* Toplevel: no longer set globals for toplevel initialization
+* Runtime: precompute constants used in `caml_lxm_next` (#1730)
+* Runtime: cleanup runtime
+
+## Bug fixes
+* Runtime: fix parsing of unsigned integers (0u2147483648) (#1633, #1666)
+* Runtime: fix incorrect pos_in after unmarshalling
+* Runtime: make float_of_string stricter (#1609)
+* Toplevel: fix missing primitives with separate compilation
+* Compiler: fix link of packed modules with separate compilation
+* Compiler: Fixed the static evaluation of some equalities (#1659)
+* Compiler: fix global analysis bug (subsumes #1556)
+
+# 5.8.2 (2024-05-26) - Luc
+
+## Bug fixes
+* Compiler: fix variable renaming for property binding and assignment target (part 2)
+
+# 5.8.1 (2024-05-05) - Lille
+
+## Features/Changes
+
+* Library: new Typed_array.Bytes module.
+
+## Bug fixes
+
+* Compiler: fix #1509
+
+# 5.8.0 (2024-04-20) - Lille
+
+## Features/Changes
+* Compiler: es6 now generate consise body
+* Compiler: codegen: optimize Offset_ref for negative offsets
+* Compiler: codegen: change argument passing of back edges.
+* Compiler: codegen: use Array destruction to assign args of back
+  edges with es6.
+* Compiler: codegen: specialize string equality
+* Compiler: codegen: more specialization for %int_add, %int_sub
+* Compiler: recognize and optimize String.concat
+* Compiler: more inlining - duplicate small function.
+* Compiler: Make it possible to link runtime JavaScript file
+  together with OCaml libraries #1509
+* Compiler: initial support for OCaml 5.3
+* Runtime: abort instead of exit when calling unimplemented
+  js primitives in bytecode/native. It should help if one tries
+  to understand the source of the call with gdb (see #677)
+* Runtime: re-enable marshalling of floats, disabled in jsoo 2.0
+* Runtime: new runtime api for channels
+
+
+## Bug fixes
+
+* Compiler: fix variable renaming for property binding and assignment target
+* Compiler: fix separate compilation of toplevels (broken since 5.7.0)
+* Compiler: fix assertion while checking stack compatibility (#1600)
+
+# 5.7.2 (2024-04-03) - Lille
+
+## Bug fixes
+* Runtime: add missing primitives for ocaml 5.2.0~beta1
+
+# 5.7.1 (2024-03-05) - Lille
+
+## Features/Changes
+* Compiler: only flush the necessary env for closures (#1568)
+* Library: dialog element support
+
+## Bug fixes
+* Compiler: fix --enable=vardecl
+* Compiler: fix parallel renaming (bug introduced in #1567)
+* Lib: fix paragraph construction and coercion
+* Runtime: reduce memory leak with channels (#1581)
+
+# 5.7.0 (2024-02-16) - Lille
+
+## Features/Changes
+* Mics: fix support for OCaml 5.2
+* Compiler: no longer rely on IIFE for scoping variable inside loops
+* Compiler: avoid parsing bytecode sections twice, jsoo counter part of ocaml#12599
+* Lib: add ellipse to canvasRenderingContext2D (@FayCarsons, #1555)
+
+## Bug fixes
+* Compiler: fix global dead code elimination in a toplevel context
+* Compiler: fix exit-loop-early optim in presence of closure (#1561)
+* Compiler: remove quadratic behavior in generate.ml (#1531, #1567)
+
+# 5.6.0 (2024-01-02) - Lille
+
+## Features/Changes
+* Compiler: try to preserve clorures ordering between ml and js
+* Compiler: js-parser accept for await
+
+## Bug fixes
+* Compiler: js-parser now accept all the line terminators defined in the spec
+* Compiler: js-parser: fix support for LHS assignment target
+* Compiler: js-parser: fix parser of default export
+* Compiler: js-parser: allow 'as' as ident
+* Compiler: js-parser: fix for-in rewriting
+* Compiler: js-parser: fix yield pretty print
+* Compiler: js-parser: fix async arrow function
+* Compiler: js-parser: fix class printing
+* Compiler: js-parser: fix #privateName
+
+# 5.5.2 (2023-12-01) - Lille
+
+## Features/Changes
+* Compiler: global dead code elimination (Micah Cantor, #1503)
+* Compiler: change control-flow compilation strategy (#1496)
+* Compiler: loop no longer absorb the whole continuation
+* Compiler: Dead code elimination of unused references (#2076)
+* Compiler: reduce memory consumption (#1516)
+* Compiler: support for import and export construct in the js parser/printer
+* Lib: add download attribute to anchor element
+* Misc: switch CI to OCaml 5.1
+* Misc: preliminary support for OCaml 5.2
+* Misc: support for OCaml 5.1.1
+
+## Bug fixes
+* Runtime: fix Dom_html.onIE (#1493)
+* Runtime: add conversion functions + strict equality for compatibility with Wasm_of_ocaml (#1492)
+* Runtime: Dynlink should be able to find symbols in jsoo_runtime #1517
+* Runtime: fix Unix.lstat, Unix.LargeFile.lstat (#1519)
+* Compiler: fix global flow analysis (#1494)
+* Compiler: fix js parser/printer wrt async functions (#1515)
+* Compiler: fix free variables pass wrt parameters' default value (#1521)
+* Compiler: fix free variables for classes
+* Compiler: fix internal invariant (continuation)
+* Compiler: fix variable renaming for let, const and classes
+* Lib: Url.Current.set_fragment need not any urlencode (#1497)
+
+# 5.4.0 (2023-07-06) - Lille
+
+## Bug fixes
+* Runtime: Fix recursive modules on ocaml < 4.13 (#1485)
+* Runtime: fix hashing of NaN (#1475)
+* Runtime: float rounding should resolve tie away from zero (#1475)
+* Runtime: fix Gc.stat, Gc.quick_stat, Gc.get (#1475)
+* Compiler: fix some miscompilation, probably introduced in jsoo 5.0.0,
+  revealed by OCaml 5.0
+
+# 5.3.0 (2023-06-21) - Lille
+## Features/Changes
+* Misc: Bump magic number for ocaml 5.1
+* Misc: changes to stay compatible with the next version of ppx_expect
+* Runtime: support conversion of Uint8ClampedArray typed arrays to bigarrays (#1472)
+
+## Bug fixes
+* Compiler: fix location for parsing errors when last token is a virtual semicolon
+* Compiler: fix variable renaming with nested const/let decl with identical names
+* Compiler: fix variable renaming inside js method
+* Compiler: consise body should allow any expression but object literals
+* Compiler: preserve [new] without arguments [new C] (vs [new C()]
+* Compiler: remove invalid rewriting of js (#1471, #1469)
+* Runtime: fix int32 values returned from bigarrays when wrapping Uint32Array objects (#1472)
+
+# 5.2.0 (2023-04-28) - Lille
+## Features/Changes
+* Compiler: jsoo link archive with -a (#1428)
+
+## Bug fixes
+* Compiler: put custom header at the top of the output file (fix #1441)
+* Compiler (js parser): fix parsing of js labels (fix #1440)
+* Compiler: fix simplification of js with let and const
+* Compiler: reduce memory consumption when parsing js
+* Compiler: parsing js can return a list of token, the list was sometime incorrect
+* Sourcemap: stop producing sourcemaps mappings with negative lines or columns
+* Runtime: fix marshalling with sharing and string (use-js-string)
+
+# 5.1.1 (2023-03-15) - Lille
+## Bug fixes
+* Compiler: fix jsoo link in presence of --disable use-js-string (#1430)
+
+# 5.1.0 (2023-03-07) - Otari
+## Features/Changes
+* Lib: Added support for KeyboardEvent.getModifierState
+* Misc: bump min ocaml version to 4.08
+* Misc: remove some old runtime files to support some external libs
+* Misc: switch to dune 3.7
+* Effects: partial CPS transformation, resulting in much better performances, lower compilation time and smaller generated code
+* Compiler: separate compilation can now drops unused units when linking (similar to ocamlc). (#1378)
+* Compiler: specialize string to js-string conversion for all valid utf8 strings (previously just ascii)
+* Compiler: JavaScript files generated by `js_of_ocaml` are now UTF-8 encoded.
+* Compiler: use identifier for object literals when possible
+* Compiler: Cache function arity (the length prop of a function is slow with v8)
+* Compiler: The js lexer is now utf8 aware, recognize and emit utf8 ident
+* Compiler: Update the js lexer with new number literal syntax
+* Compiler: update js parser to support most es6 feature (#1391)
+* Compiler: stop parsing the builtin js runtime if not necessary
+* Compiler: improve js pretty printer (#1405)
+* Compiler: improve debug location and speedup compilation (#1407)
+* Compiler: improve analysis for more direct call (#1397)
+* Compiler: change memory representation of OCaml strings to use js ones.
+* Toplevel: Enable separate compilation of toplevels
+* Runtime: js backtrace recording controled by OCAMLRUNPARAM
+* Runtime: support for zstd decompression of marshalled data (ocaml.5.1) (#12006)
+* Runtime: stub out custom runtime events symbols for OCaml 5.1 (#1414)
+
+## Bug fixes
+* Effects: fix Js.export and Js.export_all to work with functions (#1417,#1377)
+* Sourcemap: fix incorrect sourcemap with separate compilation
+* Compiler: fix control flow analysis; some annotations were wrong in the runtime
+* Compiler: js backtrace recording respected in the js runtime and when using effects
+* Compiler: no longer fail on invalid source file (when the file is a directory)
+* Runtime: fix the compilation of some mutually recursive functions
+
+# 5.0.1 (2022-12-20) - Lille
+## Features/Changes
+
+## Bug fixes
+Runtime: fix caml_read_file_content
+
+# 5.0.0 (2022-12-20) - Lille
+## Features/Changes
+* Compiler: add support for effect handlers (--enable=effects)
+* Compiler: small refactoring in code generation
+* Compiler: check build info compatibility when linking js file.
+* Compiler: rewrite control flow compilation logic
+* Misc: fix and update benchmarks
+* Misc: upgrade CI
+* Toplevel: recover more names when generating code during toplevel evaluation
+* Runtime: wrapping exception or not is now controled in the runtime.
+
+## Bug fixes
+* Runime: Gc.finalise_last should not be eliminated
+* Tyxml: reactive dom needed a fix after #1268 (#1353)
+* Toplevel: Make sure the toplevel uses the correct memory representaion for strings
+* Compiler: fix minifier, missing constraint on try-catch blocks.
+* Compiler: Miscompilation of code involving references and exceptions (#1354, #1356)
+
+# 4.1.0 (2022-11-15) - Lille
+## Features/Changes
+* Compiler: initial support for OCaml 5 (#1265,#1303)
+* Compiler: bump magic number to match the 5.0.0~alpha0 release (#1288)
+* Compiler: complain when runtime and compiler built-in primitives disagree (#1312)
+* Compiler: more efficient implementation of Js_traverse.freevar
+* Compiler: more efficient implementation of Js_traverse.rename_variable
+* Compiler: --linkall now export all compilation units in addition to primitives (#1324)
+* Compiler: improve --dynlink, one no longer need to pass --toplevel to use Dynlink (#1324)
+* Compiler: toplevel runtime files "+toplevel.js" and "+dynlink.js" are added automatically (#1324)
 * Misc: switch to cmdliner.1.1.0
 * Misc: remove old binaries jsoo_link, jsoo_fs
 * Misc: remove uchar dep
 * Misc: use 4.14 in the CI
+* Misc: switch to dune 3
 * Lib: add missing options for Intl.DateTimeFormat
 * Lib: add missing options for Intl.NumberFormat
-* Runtime: Implement weak semantic for weak and ephemeron
-* Runtime: Implement Gc.finalise_last
 * Lib: wheel event binding
+* Lib: add normalize in js_string (ES6)
+* Lib: more complete transition event bindings
+* Lib: remove support for old browser-specific transition events
+* Runtime: Implement weak semantic for weak and ephemeron (#1268)
+* Runtime: Implement Gc.finalise_last
+* Runtime: Implement buffer for in_channels
+* Runtime: add support for unix_opendir, unix_readdir, unix_closedir, win_findfirst, win_findnext, win_findclose
+* Runtime: Dont use require when target-env is browser
+* Runtime: Implements Parsing.set_trace (#1308)
+* Runtime: ocaml string are represented as javascript ones.
+* Test: track external used in the stdlib and unix
 
 ## Bug fixes
+* Compiler: fix quadratic behavior of dominance frontier (fix #1300)
 * Compiler: fix rewriter bug in share_constant (fix #1247)
+* Compiler: fix miscompilation of mutually recursive functions in loop (#1321)
+* Compiler: fix bug while minifying/renaming try-catch blocks
+* Compiler: no dead code elimination for caml_js_get
+* Runtime: fix ocamlyacc parse engine (#1307)
 * Runtime: fix Out_channel.is_buffered, set_buffered
 * Runtime: fix format wrt alternative
+* Runtime: fix Digest.channel
+* Runtime: sync channel seek / pos with the native runtime
 * Misc: fix installation with dune 3 without opam
+* Node: Only write small chunks to stdout/stderr so they flush
+* Deriving: fix for nested polymorphic variants
 
 # 4.0.0 (2021-01-24) - Lille
 ## Features/Changes

@@ -22,14 +22,14 @@ open Util
 let%expect_test "static eval of string get" =
   let program =
     compile_and_parse
-      ~flags:[ "--enable"; "use-js-string" ]
+      ~use_js_string:true
       {|
     let lr = ref []
     let black_box v = lr := (Obj.repr v) :: !lr
 
     let constant = "abcdefghijklmnopqrstuvwxyz"
 
-    let call_with_char c = black_box c
+    let call_with_char c = try black_box c with _ -> assert false
 
     let ex = call_with_char constant.[-10] ;;
     black_box ex
@@ -44,21 +44,24 @@ let%expect_test "static eval of string get" =
   print_var_decl program "bx";
   [%expect
     {|
-    var ex = call_with_char(caml_string_get(cst_abcdefghijklmnopqrstuvwxyz,- 10));
+    var ex = call_with_char(caml_string_get(cst_abcdefghijklmnopqrstuvwxyz, - 10));
+    //end
     var ax = call_with_char(103);
-    var bx = call_with_char(caml_string_get(cst_abcdefghijklmnopqrstuvwxyz,30)); |}]
+    //end
+    var bx = call_with_char(caml_string_get(cst_abcdefghijklmnopqrstuvwxyz, 30));
+    //end |}]
 
 let%expect_test "static eval of string get" =
   let program =
     compile_and_parse
-      ~flags:[ "--disable"; "use-js-string" ]
+      ~use_js_string:false
       {|
     let lr = ref []
     let black_box v = lr := (Obj.repr v) :: !lr
 
     let constant = "abcdefghijklmnopqrstuvwxyz"
 
-    let call_with_char c = black_box c
+    let call_with_char c = try black_box c with _ -> assert false
 
     let ex = call_with_char constant.[-10] ;;
     black_box ex
@@ -73,16 +76,19 @@ let%expect_test "static eval of string get" =
   print_var_decl program "bx";
   [%expect
     {|
-    var ex = call_with_char(caml_string_get(constant,- 10));
+    var ex = call_with_char(caml_string_get(constant, - 10));
+    //end
     var ax = call_with_char(103);
-    var bx = call_with_char(caml_string_get(constant,30)); |}]
+    //end
+    var bx = call_with_char(caml_string_get(constant, 30));
+    //end |}]
 
 let%expect_test "static eval of Sys.backend_type" =
   let program =
     compile_and_parse_whole_program
       {|
     exception Myfun of (unit -> int)
-    let myfun () = 
+    let myfun () =
       let constant = match Sys.backend_type with
       | Other "js_of_ocaml" -> 42
       | Native -> 1
@@ -95,7 +101,8 @@ let%expect_test "static eval of Sys.backend_type" =
   in
   print_fun_decl program (Some "myfun");
   [%expect {|
-    function myfun(param){return 42} |}]
+    function myfun(param){return 42;}
+    //end |}]
 
 let%expect_test "static eval of string get" =
   let program =
@@ -107,7 +114,7 @@ let%expect_test "static eval of string get" =
         | Cons of { mutable key: 'a;
                     mutable data: 'b;
                     mutable next: ('a, 'b) bucketlist }
-      
+
       let copy_bucketlist = function
         | Empty -> Empty
         | Cons {key; data; next} ->
@@ -129,24 +136,73 @@ let%expect_test "static eval of string get" =
   print_fun_decl program (Some "copy_bucketlist");
   [%expect
     {|
-    function copy_bucketlist(param)
-     {if(param)
-       {var
-         key=param[1],
-         data=param[2],
-         next=param[3],
-         prec$0=[0,key,data,next],
-         prec=prec$0,
-         param$0=next;
-        for(;;)
-         {if(param$0)
-           {var
-             key$0=param$0[1],
-             data$0=param$0[2],
-             next$0=param$0[3],
-             r=[0,key$0,data$0,next$0];
-            prec[3] = r;
-            var prec=r,param$0=next$0;
-            continue}
-          return prec$0}}
-      return 0} |}]
+    function copy_bucketlist(param){
+     if(! param) return 0;
+     var
+      key = param[1],
+      data = param[2],
+      next = param[3],
+      prec$1 = [0, key, data, next],
+      prec = prec$1,
+      param$0 = next;
+     for(;;){
+      if(! param$0) return prec$1;
+      var
+       key$0 = param$0[1],
+       data$0 = param$0[2],
+       next$0 = param$0[3],
+       prec$0 = [0, key$0, data$0, next$0];
+      prec[3] = prec$0;
+      prec = prec$0;
+      param$0 = next$0;
+     }
+    }
+    //end |}]
+
+let%expect_test "static eval of tags" =
+  let program =
+    compile_and_parse
+      {|
+
+      type t = A | B | C of t | D of t | E of t
+
+      let foobar =
+        let x = if Random.int 3 > 1 then C (D A) else D (A) in
+        match x with
+        | A -> 1
+        | B -> 2
+        | C _
+        | D _ -> 3
+        | E _ -> 5
+
+      let export = [|foobar;foobar|]
+  |}
+  in
+  print_program program;
+  [%expect
+    {|
+    (function(globalThis){
+       "use strict";
+       var runtime = globalThis.jsoo_runtime;
+       function caml_call1(f, a0){
+        return (f.l >= 0 ? f.l : f.l = f.length) === 1
+                ? f(a0)
+                : runtime.caml_call_gen(f, [a0]);
+       }
+       var
+        global_data = runtime.caml_get_global_data(),
+        Stdlib_Random = global_data.Stdlib__Random,
+        _a_ = [0, [1, 0]],
+        _b_ = [1, 0],
+        x = 1 < caml_call1(Stdlib_Random[5], 3) ? _a_ : _b_;
+       x[0];
+       var
+        foobar = 3,
+        export$0 = [0, foobar, foobar],
+        Test = [0, foobar, export$0];
+       runtime.caml_register_global(3, Test, "Test");
+       return;
+      }
+      (globalThis));
+    //end
+    |}]

@@ -35,8 +35,8 @@ let rec remove_last l =
 let rec tail_call x f l =
   match l with
   | [] -> None
-  | [ Let (y, Apply (g, args, _)) ] when Var.compare x y = 0 && Var.compare f g = 0 ->
-      Some args
+  | [ Let (y, Apply { f = g; args; _ }) ] when Var.compare x y = 0 && Var.compare f g = 0
+    -> Some args
   | _ :: rem -> tail_call x f rem
 
 let rewrite_block (f, f_params, f_pc, args) pc blocks =
@@ -50,7 +50,6 @@ let rewrite_block (f, f_params, f_pc, args) pc blocks =
           Addr.Map.add
             pc
             { params = block.params
-            ; handler = block.handler
             ; body = remove_last block.body
             ; branch = Branch (f_pc, List.map args ~f:(fun x -> Var.Map.find x m))
             }
@@ -58,29 +57,13 @@ let rewrite_block (f, f_params, f_pc, args) pc blocks =
       | _ -> blocks)
   | _ -> blocks
 
-(* Skip try body *)
-let fold_children blocks pc f accu =
-  let block = Addr.Map.find pc blocks in
-  match block.branch with
-  | Return _ | Raise _ | Stop -> accu
-  | Branch (pc', _) | Poptrap ((pc', _), _) -> f pc' accu
-  | Pushtrap (_, _, (pc1, _), pcs) -> f pc1 (Addr.Set.fold f pcs accu)
-  | Cond (_, (pc1, _), (pc2, _)) ->
-      let accu = f pc1 accu in
-      let accu = f pc2 accu in
-      accu
-  | Switch (_, a1, a2) ->
-      let accu = Array.fold_right a1 ~init:accu ~f:(fun (pc, _) accu -> f pc accu) in
-      let accu = Array.fold_right a2 ~init:accu ~f:(fun (pc, _) accu -> f pc accu) in
-      accu
-
 let rec traverse f pc visited blocks =
   if not (Addr.Set.mem pc visited)
   then
     let visited = Addr.Set.add pc visited in
     let blocks = rewrite_block f pc blocks in
     let visited, blocks =
-      fold_children
+      Code.fold_children_skip_try_body
         blocks
         pc
         (fun pc (visited, blocks) ->

@@ -64,12 +64,27 @@ type t =
   ; mutable stable : bool
   }
 
-let name_raw t v nm = Hashtbl.add t.names v nm
+let name_raw t v nm = Hashtbl.replace t.names v nm
+
+let merge_name n1 n2 =
+  match n1, n2 with
+  | "", n2 -> n2
+  | n1, "" -> n1
+  | n1, n2 ->
+      if generated_name n1
+      then n2
+      else if generated_name n2
+      then n1
+      else if String.length n1 > String.length n2
+      then n1
+      else n2
 
 let propagate_name t v v' =
   try
     let name = Hashtbl.find t.names v in
-    name_raw t v' name
+    match Hashtbl.find t.names v' with
+    | exception Not_found -> name_raw t v' name
+    | name' -> name_raw t v' (merge_name name name')
   with Not_found -> ()
 
 let name t v nm_orig =
@@ -99,6 +114,7 @@ let name t v nm_orig =
       match str, nm_orig with
       | "", ">>=" -> "symbol_bind"
       | "", ">>|" -> "symbol_map"
+      | "", "^" -> "symbol_concat"
       | "", _ -> "symbol"
       | str, _ -> str
     in
@@ -121,8 +137,7 @@ let format_var t i x =
 
 let reserved = ref StringSet.empty
 
-let add_reserved s =
-  reserved := List.fold_left s ~init:!reserved ~f:(fun acc x -> StringSet.add x acc)
+let add_reserved s = reserved := StringSet.add s !reserved
 
 let _ = reserved := StringSet.union !reserved Reserved.keyword
 

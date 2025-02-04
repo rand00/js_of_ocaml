@@ -19,11 +19,12 @@
  *)
 open! Stdlib
 
-module Make (N : sig
-  type t
-end)
-(NSet : Set.S with type elt = N.t)
-(NMap : Map.S with type key = N.t) =
+module Make
+    (N : sig
+      type t
+    end)
+    (NSet : Set.S with type elt = N.t)
+    (NMap : Map.S with type key = N.t) =
 struct
   type t =
     { domain : NSet.t
@@ -58,22 +59,22 @@ struct
 
     let m = ref 0
 
-    type stack =
-      { stack : N.t Stack.t
+    type queue =
+      { queue : N.t Queue.t
       ; mutable set : NSet.t
       }
 
-    let is_empty st = Stack.is_empty st.stack
+    let is_empty st = Queue.is_empty st.queue
 
     let pop st =
-      let x = Stack.pop st.stack in
+      let x = Queue.pop st.queue in
       st.set <- NSet.remove x st.set;
       x
 
     let push x st =
       if not (NSet.mem x st.set)
       then (
-        Stack.push x st.stack;
+        Queue.push x st.queue;
         st.set <- NSet.add x st.set)
 
     let rec iterate g f v w =
@@ -91,24 +92,26 @@ struct
           iterate g f v w)
         else iterate g f v w
 
-    let rec traverse g visited stack x =
+    let rec traverse g visited lst x =
       if not (NSet.mem x visited)
       then (
         let visited = NSet.add x visited in
         let visited =
-          g.fold_children (fun y visited -> traverse g visited stack y) x visited
+          g.fold_children (fun y visited -> traverse g visited lst y) x visited
         in
-        Stack.push x stack;
+        lst := x :: !lst;
         visited)
       else visited
 
     let traverse_all g =
-      let stack = Stack.create () in
+      let lst = ref [] in
       let visited =
-        NSet.fold (fun x visited -> traverse g visited stack x) g.domain NSet.empty
+        NSet.fold (fun x visited -> traverse g visited lst x) g.domain NSet.empty
       in
       assert (NSet.equal g.domain visited);
-      stack
+      let queue = Queue.create () in
+      List.iter ~f:(fun x -> Queue.push x queue) !lst;
+      queue
 
     let f g f =
       n := 0;
@@ -128,7 +131,7 @@ let t1 = Timer.make () in
 let t1 = Timer.get t1 in
 let t2 = Timer.make () in
 *)
-      let w = { set = g.domain; stack = traverse_all g } in
+      let w = { set = g.domain; queue = traverse_all g } in
       (*
 let t2 = Timer.get t2 in
 let t3 = Timer.make () in
@@ -173,11 +176,12 @@ module type Tbl = sig
   val make : size -> 'a -> 'a t
 end
 
-module Make_Imperative (N : sig
-  type t
-end)
-(NSet : ISet with type elt = N.t)
-(NTbl : Tbl with type key = N.t) =
+module Make_Imperative
+    (N : sig
+      type t
+    end)
+    (NSet : ISet with type elt = N.t)
+    (NTbl : Tbl with type key = N.t) =
 struct
   type t =
     { domain : NSet.t
@@ -206,54 +210,55 @@ struct
 
     let m = ref 0
 
-    type stack =
-      { stack : N.t Stack.t
+    type queue =
+      { queue : N.t Queue.t
       ; set : NSet.t
       }
 
-    let is_empty st = Stack.is_empty st.stack
+    let is_empty st = Queue.is_empty st.queue
 
     let pop st =
-      let x = Stack.pop st.stack in
+      let x = Queue.pop st.queue in
       NSet.add st.set x;
       x
 
     let push x st =
       if NSet.mem st.set x
       then (
-        Stack.push x st.stack;
+        Queue.push x st.queue;
         NSet.remove st.set x)
 
-    let rec iterate g f v w =
+    let rec iterate g ~update f v w =
       if is_empty w
       then v
       else
         let x = pop w in
         let a = NTbl.get v x in
         incr m;
-        let b = f v x in
-        NTbl.set v x b;
+        let b = f ~update v x in
         if not (D.equal a b)
         then (
-          g.iter_children (fun y -> push y w) x;
-          iterate g f v w)
-        else iterate g f v w
+          NTbl.set v x b;
+          g.iter_children (fun y -> push y w) x);
+        iterate g ~update f v w
 
-    let rec traverse g to_visit stack x =
+    let rec traverse g to_visit lst x =
       if NSet.mem to_visit x
       then (
         NSet.remove to_visit x;
         incr n;
-        g.iter_children (fun y -> traverse g to_visit stack y) x;
-        Stack.push x stack)
+        g.iter_children (fun y -> traverse g to_visit lst y) x;
+        lst := x :: !lst)
 
     let traverse_all g =
-      let stack = Stack.create () in
+      let lst = ref [] in
       let to_visit = NSet.copy g.domain in
-      NSet.iter (fun x -> traverse g to_visit stack x) g.domain;
-      { stack; set = to_visit }
+      NSet.iter (fun x -> traverse g to_visit lst x) g.domain;
+      let queue = Queue.create () in
+      List.iter ~f:(fun x -> Queue.push x queue) !lst;
+      { queue; set = to_visit }
 
-    let f size g f =
+    let f' size g f =
       n := 0;
       m := 0;
       (*
@@ -269,12 +274,104 @@ let t2 = Timer.make () in
 let t2 = Timer.get t2 in
 let t3 = Timer.make () in
 *)
-      let res = iterate g f v w in
+      let update ~children x =
+        if children then g.iter_children (fun y -> push y w) x else push x w
+      in
+      let res = iterate g ~update f v w in
       (*
 let t3 = Timer.get t3 in
       Format.eprintf "YYY %.2f %.2f %.2f@." t1 t2 t3;
       Format.eprintf "YYY %d %d (%f)@." !m !n (float !m /. float !n);
 *)
       res
+
+    let f size g f = f' size g (fun ~update:_ v x -> f v x)
   end
+end
+
+module type ACTION = sig
+  type t
+end
+
+module type DOMAIN = sig
+  type t
+
+  val equal : t -> t -> bool
+
+  val bot : t
+
+  val top : t
+
+  val join : t -> t -> t
+end
+
+module Solver
+    (N : sig
+      type t
+    end)
+    (NSet : ISet with type elt = N.t)
+    (NTbl : Tbl with type key = N.t)
+    (A : ACTION)
+    (D : DOMAIN) =
+struct
+  type t =
+    { domain : NSet.t
+    ; iter_children : (N.t -> A.t -> unit) -> N.t -> unit
+    }
+
+  type queue =
+    { queue : N.t Queue.t
+    ; set : NSet.t
+    }
+
+  let is_empty st = Queue.is_empty st.queue
+
+  let pop st =
+    let x = Queue.pop st.queue in
+    NSet.add st.set x;
+    x
+
+  let push x st =
+    if NSet.mem st.set x
+    then (
+      Queue.push x st.queue;
+      NSet.remove st.set x)
+
+  let rec iterate g f ~state w =
+    if not (is_empty w)
+    then (
+      let dep = pop w in
+      if not (D.equal (NTbl.get state dep) D.bot)
+      then
+        g.iter_children
+          (fun target action ->
+            let a = NTbl.get state target in
+            if not (D.equal a D.top)
+            then
+              let b = D.join a (f ~state ~dep ~target ~action) in
+              if not (D.equal a b)
+              then (
+                NTbl.set state target b;
+                push target w))
+          dep;
+      iterate g f ~state w)
+
+  let rec traverse g to_visit lst x =
+    if NSet.mem to_visit x
+    then (
+      NSet.remove to_visit x;
+      g.iter_children (fun y _ -> traverse g to_visit lst y) x;
+      lst := x :: !lst)
+
+  let traverse_all g =
+    let lst = ref [] in
+    let to_visit = NSet.copy g.domain in
+    NSet.iter (fun x -> traverse g to_visit lst x) g.domain;
+    let queue = Queue.create () in
+    List.iter ~f:(fun x -> Queue.push x queue) !lst;
+    { queue; set = to_visit }
+
+  let f ~state g f =
+    let w = traverse_all g in
+    iterate g f ~state w
 end

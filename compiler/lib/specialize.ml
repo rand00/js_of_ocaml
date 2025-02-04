@@ -21,42 +21,53 @@ open! Stdlib
 open Code
 open Flow
 
-let rec function_cardinality info x acc =
-  get_approx
-    info
-    (fun x ->
-      match info.info_defs.(Var.idx x) with
-      | Expr (Closure (l, _)) -> Some (List.length l)
-      | Expr (Prim (Extern "%closure", [ Pc (NativeString prim) ])) -> (
-          try Some (Primitive.arity prim) with Not_found -> None)
-      | Expr (Apply (f, l, _)) -> (
-          if List.mem f ~set:acc
-          then None
-          else
-            match function_cardinality info f (f :: acc) with
-            | Some n ->
-                let diff = n - List.length l in
-                if diff > 0 then Some diff else None
-            | None -> None)
-      | _ -> None)
-    None
-    (fun u v ->
-      match u, v with
-      | Some n, Some m when n = m -> u
-      | _ -> None)
-    x
+let function_arity info x =
+  let rec arity info x acc =
+    get_approx
+      info
+      (fun x ->
+        match Flow.Info.def info x with
+        | Some (Closure (l, _)) -> Some (List.length l)
+        | Some (Special (Alias_prim prim)) -> (
+            try Some (Primitive.arity prim) with Not_found -> None)
+        | Some (Apply { f; args; _ }) -> (
+            if List.mem f ~set:acc
+            then None
+            else
+              match arity info f (f :: acc) with
+              | Some n ->
+                  let diff = n - List.length args in
+                  if diff > 0 then Some diff else None
+              | None -> None)
+        | _ -> None)
+      None
+      (fun u v ->
+        match u, v with
+        | Some n, Some m when n = m -> u
+        | _ -> None)
+      x
+  in
+  arity info x []
 
-let specialize_instr info (acc, free_pc, extra) i =
+let add_event loc instrs =
+  match loc with
+  | Some loc -> Event loc :: instrs
+  | None -> instrs
+
+let specialize_instr function_arity ((acc, free_pc, extra), loc) i =
   match i with
-  | Let (x, Apply (f, l, _)) when Config.Flag.optcall () -> (
-      let n' = List.length l in
-      match function_cardinality info f [] with
+  | Let (x, Apply { f; args; exact = false }) when Config.Flag.optcall () -> (
+      let n' = List.length args in
+      match function_arity f with
       | None -> i :: acc, free_pc, extra
-      | Some n when n = n' -> Let (x, Apply (f, l, true)) :: acc, free_pc, extra
+      | Some n when n = n' ->
+          Let (x, Apply { f; args; exact = true }) :: acc, free_pc, extra
       | Some n when n < n' ->
           let v = Code.Var.fresh () in
-          let args, rest = Stdlib.List.take n l in
-          ( Let (v, Apply (f, args, true)) :: Let (x, Apply (v, rest, false)) :: acc
+          let args, rest = List.take n args in
+          ( (* Reversed *)
+            Let (x, Apply { f = v; args = rest; exact = false })
+            :: add_event loc (Let (v, Apply { f; args; exact = true }) :: acc)
           , free_pc
           , extra )
       | Some n when n > n' ->
@@ -67,9 +78,11 @@ let specialize_instr info (acc, free_pc, extra) i =
             let params' = Array.to_list params' in
             let return' = Code.Var.fresh () in
             { params = params'
-            ; body = [ Let (return', Apply (f, l @ params', true)) ]
+            ; body =
+                add_event
+                  loc
+                  [ Let (return', Apply { f; args = args @ params'; exact = true }) ]
             ; branch = Return return'
-            ; handler = None
             }
           in
           ( Let (x, Closure (missing, (free_pc, missing))) :: acc
@@ -78,22 +91,29 @@ let specialize_instr info (acc, free_pc, extra) i =
       | _ -> i :: acc, free_pc, extra)
   | _ -> i :: acc, free_pc, extra
 
-let specialize_instrs info p =
+let specialize_instrs ~function_arity p =
   let blocks, free_pc =
     Addr.Map.fold
       (fun pc block (blocks, free_pc) ->
-        let body, free_pc, extra =
-          List.fold_right block.body ~init:([], free_pc, []) ~f:(fun i acc ->
-              specialize_instr info acc i)
+        let (body, free_pc, extra), _ =
+          List.fold_left
+            block.body
+            ~init:(([], free_pc, []), None)
+            ~f:(fun acc i ->
+              match i with
+              | Event loc ->
+                  let (body, free_pc, extra), _ = acc in
+                  (i :: body, free_pc, extra), Some loc
+              | _ -> specialize_instr function_arity acc i, None)
         in
         let blocks =
           List.fold_left extra ~init:blocks ~f:(fun blocks (pc, b) ->
               Addr.Map.add pc b blocks)
         in
-        Addr.Map.add pc { block with Code.body } blocks, free_pc)
+        Addr.Map.add pc { block with Code.body = List.rev body } blocks, free_pc)
       p.blocks
       (Addr.Map.empty, p.free_pc)
   in
   { p with blocks; free_pc }
 
-let f info p = specialize_instrs info p
+let f = specialize_instrs

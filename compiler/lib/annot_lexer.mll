@@ -27,6 +27,8 @@ rule main = parse
   | "Weakdef" {TWeakdef}
   | "Always" {TAlways}
   | "If" {TIf}
+  | "Alias" {TAlias}
+  | "Deprecated: " ([^'\n']* as txt) {TDeprecated txt}
   | "pure" {TA_Pure }
   | "const" {TA_Const }
   | "mutable" {TA_Mutable }
@@ -43,7 +45,7 @@ rule main = parse
   | "(" {LPARENT}
   | ")" {RPARENT}
   | "," {TComma}
-  | ":" {TSemi}
+  | ":" {TColon}
   | "<=" {LE}
   | "<"  {LT}
   | ">"  {GT}

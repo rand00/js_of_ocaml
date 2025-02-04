@@ -53,7 +53,7 @@ end = struct
 end
 
 module Var : sig
-  type t
+  type t [@@ocaml.immediate]
 
   val print : Format.formatter -> t -> unit
 
@@ -75,10 +75,6 @@ module Var : sig
 
   val compare : t -> t -> int
 
-  val get_loc : t -> Parse_info.t option
-
-  val loc : t -> Parse_info.t -> unit
-
   val name : t -> string -> unit
 
   val get_name : t -> string option
@@ -95,10 +91,20 @@ module Var : sig
 
   module Map : Map.S with type key = t
 
+  module Hashtbl : Hashtbl.S with type key = t
+
   module Tbl : sig
     type key = t
 
     type 'a t
+
+    module DataSet : sig
+      type 'a t
+
+      val iter : ('a -> unit) -> 'a t -> unit
+
+      val fold : ('a -> 'acc -> 'acc) -> 'a t -> 'acc -> 'acc
+    end
 
     type size = unit
 
@@ -107,6 +113,12 @@ module Var : sig
     val set : 'a t -> key -> 'a -> unit
 
     val make : size -> 'a -> 'a t
+
+    val make_set : size -> 'a DataSet.t t
+
+    val add_set : 'a DataSet.t t -> key -> 'a -> unit
+
+    val iter : (key -> 'a -> unit) -> 'a t -> unit
   end
 
   module ISet : sig
@@ -133,19 +145,18 @@ end = struct
     let compare : t -> t -> int = compare
 
     let equal (a : t) (b : t) = a = b
+
+    let hash x = x
   end
 
   include T
 
   let printer = Var_printer.create Var_printer.Alphabet.javascript
 
-  let locations = Hashtbl.create 17
-
   let last_var = ref 0
 
   let reset () =
     last_var := 0;
-    Hashtbl.clear locations;
     Var_printer.reset printer
 
   let to_string ?origin i = Var_printer.to_string printer ?origin i
@@ -155,14 +166,6 @@ end = struct
   (* Format.fprintf f "%s" (to_string x) *)
 
   let name i nm = Var_printer.name printer i nm
-
-  let loc i pi = Hashtbl.add locations i pi
-
-  (*;
-    Format.eprintf "loc for %d : %d-%d\n%!"
-                   i pi.Parse_info.line pi.Parse_info.col
-  *)
-  let get_loc i = try Some (Hashtbl.find locations i) with Not_found -> None
 
   let fresh () =
     incr last_var;
@@ -181,11 +184,7 @@ end = struct
 
   let get_name i = Var_printer.get_name printer i
 
-  let propagate_name i j =
-    Var_printer.propagate_name printer i j;
-    match get_loc i with
-    | None -> ()
-    | Some l -> loc j l
+  let propagate_name i j = Var_printer.propagate_name printer i j
 
   let set_pretty b = Var_printer.set_pretty printer b
 
@@ -196,13 +195,29 @@ end = struct
     propagate_name o n;
     n
 
-  let dummy = -1
-
   module Set = Set.Make (T)
   module Map = Map.Make (T)
 
   module Tbl = struct
     type 'a t = 'a array
+
+    module DataSet = struct
+      type 'a t =
+        | Empty
+        | One of 'a
+        | Many of ('a, unit) Hashtbl.t
+
+      let iter f = function
+        | Empty -> ()
+        | One a -> f a
+        | Many t -> Hashtbl.iter (fun k () -> f k) t
+
+      let fold f t acc =
+        match t with
+        | Empty -> acc
+        | One a -> f a acc
+        | Many t -> Hashtbl.fold (fun k () acc -> f k acc) t acc
+    end
 
     type key = T.t
 
@@ -213,28 +228,43 @@ end = struct
     let set t x v = t.(x) <- v
 
     let make () v = Array.make (count ()) v
-  end
 
-  module ISet = struct
-    type t = T.t array
+    let make_set () = Array.make (count ()) DataSet.Empty
 
-    type elt = T.t
+    let add_set t x k =
+      match t.(x) with
+      | DataSet.Empty -> t.(x) <- One k
+      | One k' ->
+          let tbl = Hashtbl.create 0 in
+          Hashtbl.replace tbl k' ();
+          Hashtbl.replace tbl k ();
+          t.(x) <- Many tbl
+      | Many tbl -> Hashtbl.replace tbl k ()
 
     let iter f t =
       for i = 0 to Array.length t - 1 do
-        let x = t.(i) in
-        if compare x dummy <> 0 then f x
+        f i (Array.unsafe_get t i)
       done
+  end
 
-    let mem t x = compare t.(x) dummy <> 0
+  module Hashtbl = Hashtbl.Make (T)
 
-    let add t x = t.(x) <- x
+  module ISet = struct
+    type t = BitSet.t
 
-    let remove t x = t.(x) <- dummy
+    type elt = T.t
 
-    let copy = Array.copy
+    let iter f t = BitSet.iter ~f t
 
-    let empty _v = Array.make (count ()) dummy
+    let mem t x = BitSet.mem t x
+
+    let add t (x : int) = BitSet.set t x
+
+    let remove t x = BitSet.unset t x
+
+    let copy = BitSet.copy
+
+    let empty _v = BitSet.create' (count ())
   end
 end
 
@@ -257,69 +287,147 @@ type array_or_not =
   | NotArray
   | Unknown
 
+module Native_string = struct
+  type t =
+    | Byte of string
+    | Utf of Utf8_string.t
+
+  let of_string x = Utf (Utf8_string.of_string_exn x)
+
+  let of_bytestring x = if String.is_ascii x then of_string x else Byte x
+
+  let equal a b =
+    match a, b with
+    | Byte x, Byte y -> String.equal x y
+    | Utf (Utf8 x), Utf (Utf8 y) -> String.equal x y
+    | Utf _, Byte _ | Byte _, Utf _ -> false
+end
+
 type constant =
   | String of string
-  | NativeString of string
+  | NativeString of Native_string.t
   | Float of float
   | Float_array of float array
-  | Int64 of int64
+  | Int of Targetint.t
+  | Int32 of Int32.t
+  | Int64 of Int64.t
+  | NativeInt of Int32.t (* Native int are 32bit on all known backend *)
   | Tuple of int * constant array * array_or_not
-  | Int of int32
 
-let rec constant_equal a b =
-  match a, b with
-  | String a, String b -> Some (String.equal a b)
-  | NativeString a, NativeString b -> Some (String.equal a b)
-  | Tuple (ta, a, _), Tuple (tb, b, _) ->
-      if ta <> tb || Array.length a <> Array.length b
-      then Some false
-      else
-        let same = ref (Some true) in
-        for i = 0 to Array.length a - 1 do
-          match !same, constant_equal a.(i) b.(i) with
-          | None, _ -> ()
-          | _, None -> same := None
-          | Some s, Some c -> same := Some (s && c)
-        done;
-        !same
-  | Int64 a, Int64 b -> Some (Int64.equal a b)
-  | Float_array a, Float_array b -> Some (Array.equal Float.equal a b)
-  | Int a, Int b -> Some (Int32.equal a b)
-  | Float a, Float b -> Some (Float.equal a b)
-  | String _, NativeString _ | NativeString _, String _ -> None
-  | Int _, Float _ | Float _, Int _ -> None
-  | Tuple ((0 | 254), _, _), Float_array _ -> None
-  | Float_array _, Tuple ((0 | 254), _, _) -> None
-  | Tuple _, (String _ | NativeString _ | Int64 _ | Int _ | Float _ | Float_array _) ->
-      Some false
-  | Float_array _, (String _ | NativeString _ | Int64 _ | Int _ | Float _ | Tuple _) ->
-      Some false
-  | String _, (Int64 _ | Int _ | Float _ | Tuple _ | Float_array _) -> Some false
-  | NativeString _, (Int64 _ | Int _ | Float _ | Tuple _ | Float_array _) -> Some false
-  | Int64 _, (String _ | NativeString _ | Int _ | Float _ | Tuple _ | Float_array _) ->
-      Some false
-  | Float _, (String _ | NativeString _ | Float_array _ | Int64 _ | Tuple (_, _, _)) ->
-      Some false
-  | Int _, (String _ | NativeString _ | Float_array _ | Int64 _ | Tuple (_, _, _)) ->
-      Some false
+module Constant = struct
+  type t = constant
+
+  let rec ocaml_equal a b =
+    match a, b with
+    | String a, String b -> Some (String.equal a b)
+    | NativeString a, NativeString b -> Some (Native_string.equal a b)
+    | Tuple (ta, a, _), Tuple (tb, b, _) ->
+        if ta <> tb || Array.length a <> Array.length b
+        then Some false
+        else
+          let same = ref (Some true) in
+          for i = 0 to Array.length a - 1 do
+            match !same, ocaml_equal a.(i) b.(i) with
+            | None, _ -> ()
+            | _, None -> same := None
+            | Some s, Some c -> same := Some (s && c)
+          done;
+          !same
+    | Int a, Int b -> Some (Targetint.equal a b)
+    | Int32 a, Int32 b -> Some (Int32.equal a b)
+    | Int64 a, Int64 b -> Some (Int64.equal a b)
+    | NativeInt a, NativeInt b -> Some (Int32.equal a b)
+    | Float_array a, Float_array b -> Some (Array.equal Float.ieee_equal a b)
+    | Float a, Float b -> Some (Float.ieee_equal a b)
+    | String _, NativeString _ | NativeString _, String _ -> None
+    | Int _, Float _ | Float _, Int _ -> None
+    | Tuple ((0 | 254), _, _), Float_array _ -> None
+    | Float_array _, Tuple ((0 | 254), _, _) -> None
+    | ( Tuple _
+      , ( String _
+        | NativeString _
+        | Int64 _
+        | Int _
+        | Int32 _
+        | NativeInt _
+        | Float _
+        | Float_array _ ) ) -> Some false
+    | ( Float_array _
+      , ( String _
+        | NativeString _
+        | Int64 _
+        | Int _
+        | Int32 _
+        | NativeInt _
+        | Float _
+        | Tuple _ ) ) -> Some false
+    | ( String _
+      , (Int64 _ | Int _ | Int32 _ | NativeInt _ | Float _ | Tuple _ | Float_array _) ) ->
+        Some false
+    | ( NativeString _
+      , (Int64 _ | Int _ | Int32 _ | NativeInt _ | Float _ | Tuple _ | Float_array _) ) ->
+        Some false
+    | ( Int64 _
+      , ( String _
+        | NativeString _
+        | Int _
+        | Int32 _
+        | NativeInt _
+        | Float _
+        | Tuple _
+        | Float_array _ ) ) -> Some false
+    | Float _, (String _ | NativeString _ | Float_array _ | Int64 _ | Tuple (_, _, _)) ->
+        Some false
+    | ( (Int _ | Int32 _ | NativeInt _)
+      , (String _ | NativeString _ | Float_array _ | Int64 _ | Tuple (_, _, _)) ) ->
+        Some false
+    (* Note: the following cases should not occur when compiling to Javascript *)
+    | Int _, (Int32 _ | NativeInt _)
+    | Int32 _, (Int _ | NativeInt _)
+    | NativeInt _, (Int _ | Int32 _)
+    | (Int32 _ | NativeInt _), Float _
+    | Float _, (Int32 _ | NativeInt _) -> None
+end
+
+type loc =
+  | No
+  | Before of Addr.t
+  | After of Addr.t
 
 type prim_arg =
   | Pv of Var.t
   | Pc of constant
 
+type special = Alias_prim of string
+
+type mutability =
+  | Immutable
+  | Maybe_mutable
+
+type field_type =
+  | Non_float
+  | Float
+
 type expr =
-  | Apply of Var.t * Var.t list * bool
-  | Block of int * Var.t array * array_or_not
-  | Field of Var.t * int
+  | Apply of
+      { f : Var.t
+      ; args : Var.t list
+      ; exact : bool
+      }
+  | Block of int * Var.t array * array_or_not * mutability
+  | Field of Var.t * int * field_type
   | Closure of Var.t list * cont
   | Constant of constant
   | Prim of prim * prim_arg list
+  | Special of special
 
 type instr =
   | Let of Var.t * expr
-  | Set_field of Var.t * int * Var.t
+  | Assign of Var.t * Var.t
+  | Set_field of Var.t * int * field_type * Var.t
   | Offset_ref of Var.t * int
   | Array_set of Var.t * Var.t * Var.t
+  | Event of Parse_info.t
 
 type last =
   | Return of Var.t
@@ -327,13 +435,12 @@ type last =
   | Stop
   | Branch of cont
   | Cond of Var.t * cont * cont
-  | Switch of Var.t * cont array * cont array
-  | Pushtrap of cont * Var.t * cont * Addr.Set.t
-  | Poptrap of cont * Addr.t
+  | Switch of Var.t * cont array
+  | Pushtrap of cont * Var.t * cont
+  | Poptrap of cont
 
 type block =
   { params : Var.t list
-  ; handler : (Var.t * cont) option
   ; body : instr list
   ; branch : last
   }
@@ -344,6 +451,9 @@ type program =
   ; free_pc : Addr.t
   }
 
+let noloc = No
+
+let location_of_pc pc = Before pc
 (****)
 
 module Print = struct
@@ -360,7 +470,8 @@ module Print = struct
   let rec constant f x =
     match x with
     | String s -> Format.fprintf f "%S" s
-    | NativeString s -> Format.fprintf f "%Sj" s
+    | NativeString (Byte s) -> Format.fprintf f "%Sj" s
+    | NativeString (Utf (Utf8 s)) -> Format.fprintf f "%Sj" s
     | Float fl -> Format.fprintf f "%.12g" fl
     | Float_array a ->
         Format.fprintf f "[|";
@@ -369,7 +480,10 @@ module Print = struct
           Format.fprintf f "%.12g" a.(i)
         done;
         Format.fprintf f "|]"
+    | Int i -> Format.fprintf f "%s" (Targetint.to_string i)
+    | Int32 i -> Format.fprintf f "%ldl" i
     | Int64 i -> Format.fprintf f "%LdL" i
+    | NativeInt i -> Format.fprintf f "%ldn" i
     | Tuple (tag, a, _) -> (
         Format.fprintf f "<%d>" tag;
         match Array.length a with
@@ -386,7 +500,6 @@ module Print = struct
               constant f a.(i)
             done;
             Format.fprintf f ")")
-    | Int i -> Format.fprintf f "%ld" i
 
   let arg f a =
     match a with
@@ -433,30 +546,47 @@ module Print = struct
     | Ult, [ x; y ] -> Format.fprintf f "%a <= %a" arg x arg y
     | _ -> assert false
 
+  let special f s =
+    match s with
+    | Alias_prim s -> Format.fprintf f "alias %s" s
+
   let expr f e =
     match e with
-    | Apply (g, l, exact) ->
+    | Apply { f = g; args; exact } ->
         if exact
-        then Format.fprintf f "%a!(%a)" Var.print g var_list l
-        else Format.fprintf f "%a(%a)" Var.print g var_list l
-    | Block (t, a, _) ->
-        Format.fprintf f "{tag=%d" t;
+        then Format.fprintf f "%a!(%a)" Var.print g var_list args
+        else Format.fprintf f "%a(%a)" Var.print g var_list args
+    | Block (t, a, _, mut) ->
+        Format.fprintf
+          f
+          "%s{tag=%d"
+          (match mut with
+          | Immutable -> "imm"
+          | Maybe_mutable -> "")
+          t;
         for i = 0 to Array.length a - 1 do
           Format.fprintf f "; %d = %a" i Var.print a.(i)
         done;
         Format.fprintf f "}"
-    | Field (x, i) -> Format.fprintf f "%a[%d]" Var.print x i
+    | Field (x, i, Non_float) -> Format.fprintf f "%a[%d]" Var.print x i
+    | Field (x, i, Float) -> Format.fprintf f "FLOAT{%a[%d]}" Var.print x i
     | Closure (l, c) -> Format.fprintf f "fun(%a){%a}" var_list l cont c
     | Constant c -> Format.fprintf f "CONST{%a}" constant c
     | Prim (p, l) -> prim f p l
+    | Special s -> special f s
 
   let instr f i =
     match i with
     | Let (x, e) -> Format.fprintf f "%a = %a" Var.print x expr e
-    | Set_field (x, i, y) -> Format.fprintf f "%a[%d] = %a" Var.print x i Var.print y
+    | Assign (x, y) -> Format.fprintf f "(assign) %a = %a" Var.print x Var.print y
+    | Set_field (x, i, Non_float, y) ->
+        Format.fprintf f "%a[%d] = %a" Var.print x i Var.print y
+    | Set_field (x, i, Float, y) ->
+        Format.fprintf f "FLOAT{%a[%d]} = %a" Var.print x i Var.print y
     | Offset_ref (x, i) -> Format.fprintf f "%a[0] += %d" Var.print x i
     | Array_set (x, y, z) ->
         Format.fprintf f "%a[%a] = %a" Var.print x Var.print y Var.print z
+    | Event loc -> Format.fprintf f "event %s" (Parse_info.to_string loc)
 
   let last f l =
     match l with
@@ -468,23 +598,13 @@ module Print = struct
     | Branch c -> Format.fprintf f "branch %a" cont c
     | Cond (x, cont1, cont2) ->
         Format.fprintf f "if %a then %a else %a" Var.print x cont cont1 cont cont2
-    | Switch (x, a1, a2) ->
+    | Switch (x, a1) ->
         Format.fprintf f "switch %a {" Var.print x;
         Array.iteri a1 ~f:(fun i c -> Format.fprintf f "int %d -> %a; " i cont c);
-        Array.iteri a2 ~f:(fun i c -> Format.fprintf f "tag %d -> %a; " i cont c);
         Format.fprintf f "}"
-    | Pushtrap (cont1, x, cont2, pcs) ->
-        Format.fprintf
-          f
-          "pushtrap %a handler %a => %a continuation %s"
-          cont
-          cont1
-          Var.print
-          x
-          cont
-          cont2
-          (String.concat ~sep:", " (List.map (Addr.Set.elements pcs) ~f:string_of_int))
-    | Poptrap (c, _) -> Format.fprintf f "poptrap %a" cont c
+    | Pushtrap (cont1, x, cont2) ->
+        Format.fprintf f "pushtrap %a handler %a => %a" cont cont1 Var.print x cont cont2
+    | Poptrap c -> Format.fprintf f "poptrap %a" cont c
 
   type xinstr =
     | Instr of instr
@@ -492,9 +612,6 @@ module Print = struct
 
   let block annot pc block =
     Format.eprintf "==== %d (%a) ====@." pc var_list block.params;
-    (match block.handler with
-    | Some (x, c) -> Format.eprintf "    handler %a => %a@." Var.print x cont c
-    | None -> ());
     List.iter block.body ~f:(fun i ->
         Format.eprintf " %s %a@." (annot pc (Instr i)) instr i);
     Format.eprintf " %s %a@." (annot pc (Last block.branch)) last block.branch;
@@ -522,16 +639,21 @@ let fold_closures p f accu =
 let prepend ({ start; blocks; free_pc } as p) body =
   match body with
   | [] -> p
-  | _ ->
-      let new_start = free_pc in
-      let branch = if Addr.Map.mem start blocks then Branch (start, []) else Stop in
-      let blocks =
-        Addr.Map.add new_start { params = []; handler = None; body; branch } blocks
-      in
-      let free_pc = free_pc + 1 in
-      { start = new_start; blocks; free_pc }
+  | _ -> (
+      match Addr.Map.find start blocks with
+      | block ->
+          { p with
+            blocks = Addr.Map.add start { block with body = body @ block.body } blocks
+          }
+      | exception Not_found ->
+          let new_start = free_pc in
+          let blocks =
+            Addr.Map.add new_start { params = []; body; branch = Stop } blocks
+          in
+          let free_pc = free_pc + 1 in
+          { start = new_start; blocks; free_pc })
 
-let empty_block = { params = []; handler = None; body = []; branch = Stop }
+let empty_block = { params = []; body = []; branch = Stop }
 
 let empty =
   let start = 0 in
@@ -544,30 +666,78 @@ let is_empty p =
   | 1 -> (
       let _, v = Addr.Map.choose p.blocks in
       match v with
-      | { handler = None; body; branch = Stop; params = _ } -> (
+      | { body; branch = Stop; params = _ } -> (
           match body with
           | ([] | [ Let (_, Prim (Extern "caml_get_global_data", _)) ]) when true -> true
           | _ -> false)
       | _ -> false)
   | _ -> false
 
+let poptraps blocks pc =
+  let rec loop blocks pc visited depth acc =
+    if Addr.Set.mem pc visited
+    then acc, visited
+    else
+      let visited = Addr.Set.add pc visited in
+      let block = Addr.Map.find pc blocks in
+      match block.branch with
+      | Return _ | Raise _ | Stop -> acc, visited
+      | Branch (pc', _) -> loop blocks pc' visited depth acc
+      | Poptrap (pc', _) ->
+          if depth = 0
+          then Addr.Set.add pc' acc, visited
+          else loop blocks pc' visited (depth - 1) acc
+      | Pushtrap ((pc', _), _, (pc_h, _)) ->
+          let acc, visited = loop blocks pc' visited (depth + 1) acc in
+          let acc, visited = loop blocks pc_h visited depth acc in
+          acc, visited
+      | Cond (_, (pc1, _), (pc2, _)) ->
+          let acc, visited = loop blocks pc1 visited depth acc in
+          let acc, visited = loop blocks pc2 visited depth acc in
+          acc, visited
+      | Switch (_, a) ->
+          let acc, visited =
+            Array.fold_right
+              ~init:(acc, visited)
+              ~f:(fun (pc, _) (acc, visited) -> loop blocks pc visited depth acc)
+              a
+          in
+          acc, visited
+  in
+  loop blocks pc Addr.Set.empty 0 Addr.Set.empty |> fst
+
 let fold_children blocks pc f accu =
   let block = Addr.Map.find pc blocks in
-  let accu =
-    match block.handler with
-    | Some (_, (pc, _)) -> f pc accu
-    | None -> accu
-  in
   match block.branch with
   | Return _ | Raise _ | Stop -> accu
-  | Branch (pc', _) | Poptrap ((pc', _), _) | Pushtrap ((pc', _), _, _, _) -> f pc' accu
+  | Branch (pc', _) | Poptrap (pc', _) -> f pc' accu
+  | Pushtrap ((pc', _), _, (pc_h, _)) ->
+      let accu = f pc' accu in
+      let accu = f pc_h accu in
+      accu
   | Cond (_, (pc1, _), (pc2, _)) ->
       let accu = f pc1 accu in
       let accu = f pc2 accu in
       accu
-  | Switch (_, a1, a2) ->
+  | Switch (_, a1) ->
       let accu = Array.fold_right ~init:accu ~f:(fun (pc, _) accu -> f pc accu) a1 in
-      let accu = Array.fold_right ~init:accu ~f:(fun (pc, _) accu -> f pc accu) a2 in
+      accu
+
+let fold_children_skip_try_body blocks pc f accu =
+  let block = Addr.Map.find pc blocks in
+  match block.branch with
+  | Return _ | Raise _ | Stop -> accu
+  | Branch (pc', _) | Poptrap (pc', _) -> f pc' accu
+  | Pushtrap ((pc', _), _, (pc_h, _)) ->
+      let accu = Addr.Set.fold f (poptraps blocks pc') accu in
+      let accu = f pc_h accu in
+      accu
+  | Cond (_, (pc1, _), (pc2, _)) ->
+      let accu = f pc1 accu in
+      let accu = f pc2 accu in
+      accu
+  | Switch (_, a1) ->
+      let accu = Array.fold_right ~init:accu ~f:(fun (pc, _) accu -> f pc accu) a1 in
       accu
 
 type 'c fold_blocs = block Addr.Map.t -> Addr.t -> (Addr.t -> 'c -> 'c) -> 'c -> 'c
@@ -593,6 +763,61 @@ let rec traverse' { fold } f pc visited blocks acc =
 
 let traverse fold f pc blocks acc = snd (traverse' fold f pc Addr.Set.empty blocks acc)
 
+let rec preorder_traverse' { fold } f pc visited blocks acc =
+  if not (Addr.Set.mem pc visited)
+  then
+    let visited = Addr.Set.add pc visited in
+    let acc = f pc acc in
+    fold
+      blocks
+      pc
+      (fun pc (visited, acc) ->
+        let visited, acc = preorder_traverse' { fold } f pc visited blocks acc in
+        visited, acc)
+      (visited, acc)
+  else visited, acc
+
+let preorder_traverse fold f pc blocks acc =
+  snd (preorder_traverse' fold f pc Addr.Set.empty blocks acc)
+
+let fold_closures_innermost_first { start; blocks; _ } f accu =
+  let rec visit blocks pc f accu =
+    traverse
+      { fold = fold_children }
+      (fun pc accu ->
+        let block = Addr.Map.find pc blocks in
+        List.fold_left block.body ~init:accu ~f:(fun accu i ->
+            match i with
+            | Let (x, Closure (params, cont)) ->
+                let accu = visit blocks (fst cont) f accu in
+                f (Some x) params cont accu
+            | _ -> accu))
+      pc
+      blocks
+      accu
+  in
+  let accu = visit blocks start f accu in
+  f None [] (start, []) accu
+
+let fold_closures_outermost_first { start; blocks; _ } f accu =
+  let rec visit blocks pc f accu =
+    traverse
+      { fold = fold_children }
+      (fun pc accu ->
+        let block = Addr.Map.find pc blocks in
+        List.fold_left block.body ~init:accu ~f:(fun accu i ->
+            match i with
+            | Let (x, Closure (params, cont)) ->
+                let accu = f (Some x) params cont accu in
+                visit blocks (fst cont) f accu
+            | _ -> accu))
+      pc
+      blocks
+      accu
+  in
+  let accu = f None [] (start, []) accu in
+  visit blocks start f accu
+
 let eq p1 p2 =
   p1.start = p2.start
   && Addr.Map.cardinal p1.blocks = Addr.Map.cardinal p2.blocks
@@ -614,39 +839,64 @@ let with_invariant = Debug.find "invariant"
 let check_defs = false
 
 let invariant { blocks; start; _ } =
+  let target = Config.target () in
   if with_invariant ()
   then (
     assert (Addr.Map.mem start blocks);
-    let defs = Array.make (Var.count ()) false in
+    let defs = Var.ISet.empty () in
     let check_cont (cont, args) =
       let b = Addr.Map.find cont blocks in
-      assert (List.length args >= List.length b.params)
+      assert (List.length args = List.length b.params)
     in
     let define x =
       if check_defs
       then (
-        assert (not defs.(Var.idx x));
-        defs.(Var.idx x) <- true)
+        assert (not (Var.ISet.mem defs x));
+        Var.ISet.add defs x)
+    in
+    let check_constant = function
+      | NativeInt _ | Int32 _ ->
+          assert (
+            match target with
+            | `Wasm -> true
+            | _ -> false)
+      | String _ | NativeString _ | Float _ | Float_array _ | Int _ | Int64 _
+      | Tuple (_, _, _) -> ()
+    in
+    let check_prim_arg = function
+      | Pc c -> check_constant c
+      | Pv _ -> ()
     in
     let check_expr = function
-      | Apply (_, _, _) -> ()
-      | Block (_, _, _) -> ()
-      | Field (_, _) -> ()
+      | Apply _ -> ()
+      | Block (_, _, _, _) -> ()
+      | Field (_, _, _) -> ()
       | Closure (l, cont) ->
           List.iter l ~f:define;
           check_cont cont
-      | Constant _ -> ()
-      | Prim (_, _) -> ()
+      | Constant c -> check_constant c
+      | Prim (_, args) -> List.iter ~f:check_prim_arg args
+      | Special _ -> ()
     in
-    let check_instr = function
+    let check_instr i =
+      match i with
       | Let (x, e) ->
           define x;
           check_expr e
-      | Set_field (_, _i, _) -> ()
+      | Assign _ -> ()
+      | Set_field (_, _i, _, _) -> ()
       | Offset_ref (_x, _i) -> ()
       | Array_set (_x, _y, _z) -> ()
+      | Event _ -> ()
     in
-    let check_last = function
+    let rec check_events l =
+      match l with
+      | Event _ :: Event _ :: _ -> assert false
+      | _ :: r -> check_events r
+      | [] -> ()
+    in
+    let check_last l =
+      match l with
       | Return _ -> ()
       | Raise _ -> ()
       | Stop -> ()
@@ -654,18 +904,16 @@ let invariant { blocks; start; _ } =
       | Cond (_x, cont1, cont2) ->
           check_cont cont1;
           check_cont cont2
-      | Switch (_x, a1, a2) ->
-          Array.iteri a1 ~f:(fun _ cont -> check_cont cont);
-          Array.iteri a2 ~f:(fun _ cont -> check_cont cont)
-      | Pushtrap (cont1, _x, cont2, _pcs) ->
+      | Switch (_x, a1) -> Array.iteri a1 ~f:(fun _ cont -> check_cont cont)
+      | Pushtrap (cont1, _x, cont2) ->
           check_cont cont1;
           check_cont cont2
-      | Poptrap (cont, _) -> check_cont cont
+      | Poptrap cont -> check_cont cont
     in
     Addr.Map.iter
       (fun _pc block ->
         List.iter block.params ~f:define;
-        Option.iter block.handler ~f:(fun (_, cont) -> check_cont cont);
         List.iter block.body ~f:check_instr;
+        check_events block.body;
         check_last block.branch)
       blocks)

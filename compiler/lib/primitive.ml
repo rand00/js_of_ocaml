@@ -49,8 +49,15 @@ type t =
   | `Version of ((int -> int -> bool) * string) list
   | `Weakdef
   | `Always
+  | `Alias of string
+  | `Deprecated of string
   | condition
   ]
+
+let string_of_kind = function
+  | `Pure -> "pure"
+  | `Mutable -> "mutable"
+  | `Mutator -> "mutator"
 
 let kinds = Hashtbl.create 37
 
@@ -67,7 +74,10 @@ let arity nm = Hashtbl.find arities (resolve nm)
 
 let has_arity nm a = try Hashtbl.find arities (resolve nm) = a with Not_found -> false
 
-let is_pure nm = Poly.(kind nm <> `Mutator)
+let is_pure nm =
+  match nm with
+  | "%identity" | "%direct_int_div" | "%direct_int_mod" | "%direct_int_mul" -> true
+  | _ -> Poly.(kind nm <> `Mutator)
 
 let exists p = Hashtbl.mem kinds p
 
@@ -75,27 +85,41 @@ let externals = ref StringSet.empty
 
 let add_external name = externals := StringSet.add name !externals
 
-let is_external name = StringSet.mem name !externals
-
 let get_external () = !externals
 
 let register p k kargs arity =
+  (match Hashtbl.find kinds (resolve p) with
+  | exception Not_found -> ()
+  | k' when Poly.(k = k') -> ()
+  | k' ->
+      warn
+        "Warning: overriding the purity of the primitive %s: %s -> %s@."
+        p
+        (string_of_kind k')
+        (string_of_kind k));
   add_external p;
   (match arity with
-  | Some a -> Hashtbl.add arities p a
+  | Some a -> Hashtbl.replace arities p a
   | _ -> ());
   (match kargs with
-  | Some k -> Hashtbl.add kind_args_tbl p k
+  | Some k -> Hashtbl.replace kind_args_tbl p k
   | _ -> ());
-  Hashtbl.add kinds p k
+  Hashtbl.replace kinds p k
 
 let alias nm nm' =
   add_external nm';
   add_external nm;
-  Hashtbl.add aliases nm nm'
+  Hashtbl.replace aliases nm nm'
 
 let named_values = ref StringSet.empty
 
 let need_named_value s = StringSet.mem s !named_values
 
 let register_named_value s = named_values := StringSet.add s !named_values
+
+let reset () =
+  Hashtbl.clear kinds;
+  Hashtbl.clear kind_args_tbl;
+  Hashtbl.clear arities;
+  Hashtbl.clear aliases;
+  named_values := StringSet.empty

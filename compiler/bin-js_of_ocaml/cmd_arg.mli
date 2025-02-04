@@ -23,12 +23,12 @@ type t =
   { common : Jsoo_cmdline.Arg.t
   ; (* compile option *)
     profile : Driver.profile option
-  ; source_map : (string option * Source_map.t) option
+  ; source_map : (string option * Source_map.Standard.t) option
   ; runtime_files : string list
   ; no_runtime : bool
-  ; runtime_only : bool
+  ; include_runtime : bool
   ; output_file : [ `Name of string | `Stdout ] * bool
-  ; input_file : string option
+  ; bytecode : [ `File of string | `Stdin | `None ]
   ; params : (string * string) list
   ; static_env : (string * string) list
   ; wrap_with_fun :
@@ -42,7 +42,7 @@ type t =
   ; linkall : bool
   ; toplevel : bool
   ; export_file : string option
-  ; nocmis : bool
+  ; no_cmis : bool
   ; (* filesystem *)
     include_dirs : string list
   ; fs_files : string list

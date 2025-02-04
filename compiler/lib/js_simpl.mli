@@ -21,7 +21,8 @@
 open Javascript
 
 val if_statement :
-     expression
+     function_end:(unit -> location)
+  -> expression
   -> location
   -> statement * location
   -> bool
@@ -29,8 +30,8 @@ val if_statement :
   -> bool
   -> (statement * location) list
 
-val get_variable : Code.Var.Set.t -> expression -> Code.Var.Set.t
-
 val block : (Javascript.statement * location) list -> Javascript.statement * location
 
 val unblock : Javascript.statement * location -> (Javascript.statement * location) list
+
+val function_body : (statement * location) list -> (statement * location) list

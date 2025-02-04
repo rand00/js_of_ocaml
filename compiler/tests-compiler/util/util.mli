@@ -34,6 +34,8 @@ val compile_lib : Filetype.cmo_file list -> string -> Filetype.cmo_file
 
 val compile_cmo_to_javascript :
      ?flags:string list
+  -> ?effects:bool
+  -> ?use_js_string:bool
   -> ?pretty:bool
   -> ?sourcemap:bool
   -> Filetype.cmo_file
@@ -41,6 +43,8 @@ val compile_cmo_to_javascript :
 
 val compile_bc_to_javascript :
      ?flags:string list
+  -> ?effects:bool
+  -> ?use_js_string:bool
   -> ?pretty:bool
   -> ?sourcemap:bool
   -> Filetype.bc_file
@@ -53,6 +57,10 @@ val extract_sourcemap : Filetype.js_file -> Js_of_ocaml_compiler.Source_map.t op
 
 val run_javascript : Filetype.js_file -> string
 
+val check_javascript : Filetype.js_file -> string
+
+val check_javascript_source : string -> string
+
 val expression_to_string : ?compact:bool -> Javascript.expression -> string
 
 val print_file : string -> unit
@@ -63,13 +71,40 @@ val print_var_decl : Javascript.program -> string -> unit
 
 val print_fun_decl : Javascript.program -> string option -> unit
 
-val compile_and_run : ?flags:string list -> ?unix:bool -> string -> unit
+val find_variable : Javascript.program -> string -> Javascript.expression
+
+val find_function : Javascript.program -> string -> Javascript.function_declaration
+
+val compile_and_run :
+     ?debug:bool
+  -> ?pretty:bool
+  -> ?skip_modern:bool
+  -> ?flags:string list
+  -> ?effects:bool
+  -> ?use_js_string:bool
+  -> ?unix:bool
+  -> string
+  -> unit
 
 val compile_and_run_bytecode : ?unix:bool -> string -> unit
 
-val compile_and_parse : ?debug:bool -> ?flags:string list -> string -> Javascript.program
+val compile_and_parse :
+     ?debug:bool
+  -> ?pretty:bool
+  -> ?flags:string list
+  -> ?effects:bool
+  -> ?use_js_string:bool
+  -> string
+  -> Javascript.program
 
 val compile_and_parse_whole_program :
-  ?debug:bool -> ?flags:string list -> ?unix:bool -> string -> Javascript.program
+     ?debug:bool
+  -> ?pretty:bool
+  -> ?flags:string list
+  -> ?effects:bool
+  -> ?use_js_string:bool
+  -> ?unix:bool
+  -> string
+  -> Javascript.program
 
 val normalize_path : string -> string

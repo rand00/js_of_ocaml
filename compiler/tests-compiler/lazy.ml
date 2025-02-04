@@ -33,10 +33,16 @@ let%expect_test "static eval of string get" =
   print_fun_decl program (Some "do_the_lazy_rec");
   [%expect
     {|
-    function do_the_lazy_rec(n)
-     {if(0 === n)return 0;
-      var
-       _b_=do_the_lazy_rec(n - 1 | 0),
-       _c_=runtime.caml_obj_tag(lz),
-       _d_=250 === _c_?lz[1]:246 === _c_?caml_call1(CamlinternalLazy[2],lz):lz;
-      return [0,_d_,_b_]} |}]
+    function do_the_lazy_rec(n){
+     if(0 === n) return 0;
+     var _b_ = do_the_lazy_rec(n - 1 | 0), _c_ = runtime.caml_obj_tag(lz);
+     a:
+     if(250 === _c_)
+      var _d_ = lz[1];
+     else{
+      if(246 !== _c_ && 244 !== _c_){var _d_ = lz; break a;}
+      var _d_ = caml_call1(CamlinternalLazy[2], lz);
+     }
+     return [0, _d_, _b_];
+    }
+    //end |}]

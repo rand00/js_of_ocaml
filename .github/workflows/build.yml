@@ -17,31 +17,60 @@ jobs:
         os:
           - ubuntu-latest
         ocaml-compiler:
-          - 4.04.x
-          - 4.05.x
-          - 4.06.x
-          - 4.07.x
-          - 4.08.x
-          - 4.09.x
-          - 4.10.x
-          - 4.11.x
-          - 4.12.x
-          - 4.13.x
+          - "4.08"
+          - "4.09"
+          - "4.10"
+          - "4.11"
+          - "4.12"
+          - "4.13"
+          - "5.0"
+          - "5.1"
         skip-test:
           - true
         skip-doc:
           - true
+        skip-effects:
+          - true
         include:
           - os: ubuntu-latest
-            ocaml-compiler: 4.14.x
+            ocaml-compiler: "4.14"
+            skip-effects: true
             skip-test: false
-            skip-doc: false
+            skip-doc: true
+          - os: ubuntu-latest
+            ocaml-compiler: "ocaml-variants.4.14.2+options,ocaml-option-32bit"
+            skip-effects: true
+            skip-test: false
+            skip-doc: true
           - os: macos-latest
-            ocaml-compiler: 4.14.x
+            ocaml-compiler: "4.14"
+            skip-effects: true
             skip-test: false
             skip-doc: true
           - os: windows-latest
-            ocaml-compiler: 4.14.x
+            ocaml-compiler: "4.14"
+            skip-effects: true
+            skip-test: false
+            skip-doc: true
+          - os: ubuntu-latest
+            ocaml-compiler: "5.2"
+            skip-effects: false
+            skip-test: false
+            skip-doc: false
+            # Note this OCaml compiler is bytecode only
+          - os: ubuntu-latest
+            ocaml-compiler: "ocaml-variants.5.2.0+options,ocaml-option-32bit"
+            skip-effects: true # disabled for the same reason than `skip-test`
+            skip-test: true # the `time_now.0.17` package is pulled and doesn't work in 32 bits :(
+            skip-doc: true
+          - os: macos-latest
+            ocaml-compiler: "5.2"
+            skip-effects: true
+            skip-test: false
+            skip-doc: true
+          - os: windows-latest
+            ocaml-compiler: "5.2"
+            skip-effects: false
             skip-test: false
             skip-doc: true
 
@@ -49,26 +78,42 @@ jobs:
 
     steps:
       - name: Set git to use LF
+        if: matrix.ocaml-compiler < 5.2
         run: |
           git config --global core.autocrlf false
           git config --global core.eol lf
           git config --global core.ignorecase false
 
-      - name: Checkout code
-        uses: actions/checkout@v3
+        # EJGA: Note that I tried to fix this upstream as depext is
+        # getting much better, but no luck yet, c.f:
+        # https://github.com/ocaml/opam-repository/pull/26626
+      - name: Install apt 32-bit dependencies
+        if: contains( matrix.ocaml-compiler, 'ocaml-option-32bit')
+        run: |
+          sudo apt-get install aptitude
+          sudo dpkg --add-architecture i386
+          sudo aptitude -o Acquire::Retries=30 update -q
+          # Note we also install the 64-bit versions here as opam will
+          # try to install them anyways, so we save an apt-roundtrip.
+          sudo aptitude -o Acquire::Retries=30 install gcc-multilib g++-multilib pkg-config libgmp-dev libgmp-dev:i386 libx11-dev:i386 -y
 
-      - name: Use Node.js 16.x
-        uses: actions/setup-node@v2
+      - name: Checkout tree
+        uses: actions/checkout@v4
+
+      - name: Set-up Node.js
+        uses: actions/setup-node@v4
         with:
-          node-version: 16.x
+          node-version: lts/*
 
-      - name: Use OCaml ${{ matrix.ocaml-compiler }}
-        uses: ocaml/setup-ocaml@v2
+      - name: Set-up OCaml ${{ matrix.ocaml-compiler }}
+        uses: ocaml/setup-ocaml@v3
         with:
           ocaml-compiler: ${{ matrix.ocaml-compiler }}
-          dune-cache: ${{ matrix.os == 'ubuntu-latest' }}
-          opam-depext: ${{ !matrix.skip-test }}
-          opam-depext-flags: --with-test
+          dune-cache: true
+          opam-pin: false
+
+      - run: opam install conf-pkg-config
+        if: runner.os == 'Windows'
 
       - run: opam install . --best-effort
         if: ${{ matrix.skip-test }}
@@ -82,35 +127,23 @@ jobs:
       - run: opam exec -- make tests
         if: ${{ !matrix.skip-test }}
 
+      - run: opam exec -- dune build @all @runtest --profile using-effects
+        if: ${{ !matrix.skip-effects }}
+
       - run: opam exec -- git diff --exit-code
         if: ${{ !matrix.skip-test }}
 
       - name: build doc
-        if: ${{ !matrix.skip-doc && github.event_name == 'push' && github.ref == 'refs/heads/master'}}
+        if: ${{ !matrix.skip-doc && github.event_name == 'push' && github.ref_name == 'master'}}
         run: |
           opam install odoc lwt_log cohttp-lwt-unix yojson ocp-indent graphics higlo
           opam exec -- make doc
 
       - name: synchronize doc
-        if: ${{ !matrix.skip-doc && github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-        uses: JamesIves/github-pages-deploy-action@4.2.1
+        if: ${{ !matrix.skip-doc && github.event_name == 'push' && github.ref_name == 'master' }}
+        uses: JamesIves/github-pages-deploy-action@v4
         with:
           branch: wikidoc
           folder: doc-dev
           clean: true
           target-folder: doc/dev/
-
-  lint-fmt:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Use OCaml 4.14.x
-        uses: ocaml/setup-ocaml@v2
-        with:
-          ocaml-compiler: 4.14.x
-          dune-cache: true
-
-      - name: Lint fmt
-        uses: ocaml/setup-ocaml/lint-fmt@v2

@@ -47,6 +47,8 @@ type t =
   | `Version of ((int -> int -> bool) * string) list
   | `Weakdef
   | `Always
+  | `Alias of string
+  | `Deprecated of string
   | condition
   ]
 
@@ -66,10 +68,10 @@ val resolve : string -> string
 
 val add_external : string -> unit
 
-val is_external : string -> bool
-
 val get_external : unit -> StringSet.t
 
 val need_named_value : string -> bool
 
 val register_named_value : string -> unit
+
+val reset : unit -> unit

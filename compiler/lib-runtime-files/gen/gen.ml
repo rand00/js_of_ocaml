@@ -31,13 +31,28 @@ let read_file f =
     failwith (Printf.sprintf "Cannot read content of %s.\n%s" f (Printexc.to_string e))
 
 let to_ident s =
-  String.map (String.uncapitalize_ascii s) ~f:(function
-      | 'a' .. 'z' as c -> c
-      | 'A' .. 'Z' as c -> c
-      | '0' .. '9' as c -> c
-      | _ -> '_')
+  match
+    String.map (String.uncapitalize_ascii s) ~f:(function
+        | 'a' .. 'z' as c -> c
+        | 'A' .. 'Z' as c -> c
+        | '0' .. '9' as c -> c
+        | _ -> '_')
+  with
+  | "effect" -> "effect_"
+  | x -> x
+
+let rec list_product l =
+  match l with
+  | [] -> [ [] ]
+  | (key, values) :: xs ->
+      let tail = list_product xs in
+      List.concat_map values ~f:(fun v -> List.map tail ~f:(fun l -> (key, v) :: l))
+
+let bool = [ true; false ]
 
 let () =
+  Js_of_ocaml_compiler.Config.set_target `JavaScript;
+  let () = set_binary_mode_out stdout true in
   match Array.to_list Sys.argv with
   | [] -> assert false
   | _ :: rest ->
@@ -45,20 +60,19 @@ let () =
       let fragments =
         List.map rest ~f:(fun f -> f, Js_of_ocaml_compiler.Linker.Fragment.parse_file f)
       in
+      let variants = list_product [ "use-js-string", bool; "effects", bool ] in
       (* load all files to make sure they are valid *)
-      List.iter [ true; false ] ~f:(fun js_string ->
-          (if js_string
-          then Js_of_ocaml_compiler.Config.Flag.enable
-          else Js_of_ocaml_compiler.Config.Flag.disable)
-            "use-js-string";
+      List.iter variants ~f:(fun setup ->
+          List.iter setup ~f:(fun (name, b) ->
+              Js_of_ocaml_compiler.Config.Flag.set name b);
           List.iter Js_of_ocaml_compiler.Target_env.all ~f:(fun target_env ->
               Js_of_ocaml_compiler.Linker.reset ();
               List.iter fragments ~f:(fun (filename, frags) ->
                   Js_of_ocaml_compiler.Linker.load_fragments ~target_env ~filename frags);
               let linkinfos = Js_of_ocaml_compiler.Linker.init () in
-              let prov = Js_of_ocaml_compiler.Linker.get_provided () in
+              let prov = Js_of_ocaml_compiler.Linker.list_all () in
               let _linkinfos, missing =
-                Js_of_ocaml_compiler.Linker.resolve_deps ~linkall:true linkinfos prov
+                Js_of_ocaml_compiler.Linker.resolve_deps linkinfos prov
               in
               Js_of_ocaml_compiler.Linker.check_deps ();
               assert (StringSet.is_empty missing)));
@@ -66,8 +80,22 @@ let () =
       List.iter fragments ~f:(fun (f, _fragments) ->
           let name = Filename.basename f in
           let content = read_file f in
+
+          let fragments =
+            Js_of_ocaml_compiler.Linker.Fragment.parse_builtin
+              (Js_of_ocaml_compiler.Builtins.File.create ~name:("+" ^ name) ~content)
+          in
+          let fragments =
+            List.map fragments ~f:Js_of_ocaml_compiler.Linker.Fragment.pack
+          in
           Printf.printf
-            "let %s = Js_of_ocaml_compiler.Builtins.register ~name:\"%s\" ~content:\"%s\"\n"
+            {|
+let %s = Js_of_ocaml_compiler.Builtins.register
+  ~name:%S
+  ~content:{frag|%s|frag}
+  ~fragments:(Some %S)
+|}
             (to_ident (Filename.chop_extension name))
-            (String.escaped name)
-            (String.escaped content))
+            name
+            content
+            (Marshal.to_string fragments []))

@@ -26,10 +26,12 @@ let subst_cont s (pc, arg) = pc, List.map arg ~f:(fun x -> s x)
 let expr s e =
   match e with
   | Constant _ -> e
-  | Apply (f, l, n) -> Apply (s f, List.map l ~f:(fun x -> s x), n)
-  | Block (n, a, k) -> Block (n, Array.map a ~f:(fun x -> s x), k)
-  | Field (x, n) -> Field (s x, n)
+  | Apply { f; args; exact } ->
+      Apply { f = s f; args = List.map args ~f:(fun x -> s x); exact }
+  | Block (n, a, k, mut) -> Block (n, Array.map a ~f:(fun x -> s x), k, mut)
+  | Field (x, n, typ) -> Field (s x, n, typ)
   | Closure (l, pc) -> Closure (l, subst_cont s pc)
+  | Special _ -> e
   | Prim (p, l) ->
       Prim
         ( p
@@ -41,9 +43,11 @@ let expr s e =
 let instr s i =
   match i with
   | Let (x, e) -> Let (x, expr s e)
-  | Set_field (x, n, y) -> Set_field (s x, n, s y)
+  | Assign (x, y) -> Assign (x, s y) (* x is handled like a parameter *)
+  | Set_field (x, n, typ, y) -> Set_field (s x, n, typ, s y)
   | Offset_ref (x, n) -> Offset_ref (s x, n)
   | Array_set (x, y, z) -> Array_set (s x, s y, s z)
+  | Event _ -> i
 
 let instrs s l = List.map l ~f:(fun i -> instr s i)
 
@@ -51,24 +55,15 @@ let last s l =
   match l with
   | Stop -> l
   | Branch cont -> Branch (subst_cont s cont)
-  | Pushtrap (cont1, x, cont2, pcs) ->
-      Pushtrap (subst_cont s cont1, x, subst_cont s cont2, pcs)
+  | Pushtrap (cont1, x, cont2) -> Pushtrap (subst_cont s cont1, x, subst_cont s cont2)
   | Return x -> Return (s x)
   | Raise (x, k) -> Raise (s x, k)
   | Cond (x, cont1, cont2) -> Cond (s x, subst_cont s cont1, subst_cont s cont2)
-  | Switch (x, a1, a2) ->
-      Switch
-        ( s x
-        , Array.map a1 ~f:(fun cont -> subst_cont s cont)
-        , Array.map a2 ~f:(fun cont -> subst_cont s cont) )
-  | Poptrap (cont, addr) -> Poptrap (subst_cont s cont, addr)
+  | Switch (x, a1) -> Switch (s x, Array.map a1 ~f:(fun cont -> subst_cont s cont))
+  | Poptrap cont -> Poptrap (subst_cont s cont)
 
 let block s block =
-  { params = block.params
-  ; handler = Option.map block.handler ~f:(fun (x, cont) -> x, subst_cont s cont)
-  ; body = instrs s block.body
-  ; branch = last s block.branch
-  }
+  { params = block.params; body = instrs s block.body; branch = last s block.branch }
 
 let program s p =
   let blocks = Addr.Map.map (fun b -> block s b) p.blocks in
@@ -100,10 +95,7 @@ let cont s addr p =
 
 (****)
 
-let from_array s x =
-  match s.(Var.idx x) with
-  | Some y -> y
-  | None -> x
+let from_array s x = s.(Var.idx x)
 
 (****)
 

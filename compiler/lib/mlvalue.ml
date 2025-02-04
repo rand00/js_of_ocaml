@@ -20,14 +20,14 @@
 open! Stdlib
 module J = Javascript
 
-let zero = J.ENum (J.Num.of_int32 0l)
+let zero = J.ENum (J.Num.of_targetint Targetint.zero)
 
-let one = J.ENum (J.Num.of_int32 1l)
+let one = J.ENum (J.Num.of_targetint Targetint.one)
 
 (* JavaScript engines recognize the pattern 'typeof x==="number"'; if the string is
    shared, less efficient code is generated. *)
 let type_of_is_number binop e =
-  J.EBin (binop, J.EUn (J.Typeof, e), J.EStr ("number", `Bytes))
+  J.EBin (binop, J.EUn (J.Typeof, e), J.EStr (Utf8_string.of_string_exn "number"))
 
 let is_block e = type_of_is_number J.NotEqEq e
 
@@ -35,31 +35,31 @@ let is_immediate e = type_of_is_number J.EqEqEq e
 
 module Block = struct
   let make ~tag ~args =
-    J.EArr
-      (List.map ~f:(fun x -> Some x) (J.ENum (J.Num.of_int32 (Int32.of_int tag)) :: args))
+    let tag_elt = J.Element (J.ENum (J.Num.of_targetint (Targetint.of_int_exn tag))) in
+    J.EArr (tag_elt :: args)
 
-  let tag e = J.EAccess (e, zero)
+  let tag e = J.EAccess (e, ANormal, zero)
 
   let field e idx =
-    let adjusted = J.ENum (J.Num.of_int32 (Int32.of_int (idx + 1))) in
-    J.EAccess (e, adjusted)
+    let adjusted = J.ENum (J.Num.of_targetint (Targetint.of_int_exn (idx + 1))) in
+    J.EAccess (e, ANormal, adjusted)
 end
 
 module Array = struct
   let make = Block.make
 
   let length e =
-    let underlying = J.EDot (e, "length") in
+    let underlying = J.EDot (e, ANormal, Utf8_string.of_string_exn "length") in
     J.EBin (J.Minus, underlying, one)
 
   let field e i =
     match i with
     | J.ENum n ->
-        let idx = J.Num.to_int32 n in
-        let adjusted = J.ENum (J.Num.of_int32 (Int32.add idx 1l)) in
-        J.EAccess (e, adjusted)
+        let idx = J.Num.to_targetint n in
+        let adjusted = J.ENum (J.Num.of_targetint (Targetint.succ idx)) in
+        J.EAccess (e, ANormal, adjusted)
     | J.EUn (J.Neg, _) -> failwith "Negative field indexes are not allowed"
     | _ ->
         let adjusted = J.EBin (J.Plus, one, i) in
-        J.EAccess (e, adjusted)
+        J.EAccess (e, ANormal, adjusted)
 end

@@ -22,73 +22,88 @@
 
 open Js
 
-type uint32 = float
+class type arrayBuffer = object
+  method byteLength : int readonly_prop
 
-class type arrayBuffer =
-  object
-    method byteLength : int readonly_prop
+  method slice : int -> int -> arrayBuffer t meth
 
-    method slice : int -> int -> arrayBuffer t meth
-
-    method slice_toEnd : int -> arrayBuffer t meth
-  end
+  method slice_toEnd : int -> arrayBuffer t meth
+end
 
 val arrayBuffer : (int -> arrayBuffer t) constr
 
-class type arrayBufferView =
-  object
-    method buffer : arrayBuffer t readonly_prop
+class type arrayBufferView = object
+  method buffer : arrayBuffer t readonly_prop
 
-    method byteOffset : int readonly_prop
+  method byteOffset : int readonly_prop
 
-    method byteLength : int readonly_prop
-  end
+  method byteLength : int readonly_prop
+end
 
-class type ['a, 'b] typedArray =
-  object
-    inherit arrayBufferView
+class type ['a, 'b, 'c] typedArray = object
+  inherit arrayBufferView
 
-    method _BYTES_PER_ELEMENT : int readonly_prop
+  method _BYTES_PER_ELEMENT : int readonly_prop
 
-    method length : int readonly_prop
+  method length : int readonly_prop
 
-    method set_fromArray : 'a js_array t -> int -> unit meth
+  method set_fromArray : 'a js_array t -> int -> unit meth
 
-    method set_fromTypedArray : ('a, 'b) typedArray t -> int -> unit meth
+  method set_fromTypedArray : ('a, 'b, 'c) typedArray t -> int -> unit meth
 
-    method subarray : int -> int -> ('a, 'b) typedArray t meth
+  method subarray : int -> int -> ('a, 'b, 'c) typedArray t meth
 
-    method subarray_toEnd : int -> ('a, 'b) typedArray t meth
+  method subarray_toEnd : int -> ('a, 'b, 'c) typedArray t meth
 
-    method slice : int -> int -> ('a, 'b) typedArray t meth
+  method slice : int -> int -> ('a, 'b, 'c) typedArray t meth
 
-    method slice_toEnd : int -> ('a, 'b) typedArray t meth
+  method slice_toEnd : int -> ('a, 'b, 'c) typedArray t meth
 
-    method _content_type_ : 'b optdef readonly_prop
-  end
+  (* This fake method is needed for typing purposes. Without it, ['b] would not
+     be constrained. *)
+  method _content_type_ : ('b * 'c) optdef readonly_prop
+end
 
-type int8Array = (int, Bigarray.int8_signed_elt) typedArray
+type int8Array = (int, int, Bigarray.int8_signed_elt) typedArray
 
-type uint8Array = (int, Bigarray.int8_unsigned_elt) typedArray
+type uint8Array = (int, int, Bigarray.int8_unsigned_elt) typedArray
 
-type int16Array = (int, Bigarray.int16_signed_elt) typedArray
+type int16Array = (int, int, Bigarray.int16_signed_elt) typedArray
 
-type uint16Array = (int, Bigarray.int16_unsigned_elt) typedArray
+type uint16Array = (int, int, Bigarray.int16_unsigned_elt) typedArray
 
-type int32Array = (int32, Bigarray.int32_elt) typedArray
+type int32Array = (number_t, Int32.t, Bigarray.int32_elt) typedArray
 
-type uint32Array = (int32, Bigarray.int32_elt) typedArray
+type uint32Array = (number_t, Int32.t, Bigarray.int32_elt) typedArray
 
-type float32Array = (float, Bigarray.float32_elt) typedArray
+type float32Array = (number_t, float, Bigarray.float32_elt) typedArray
 
-type float64Array = (float, Bigarray.float64_elt) typedArray
+type float64Array = (number_t, float, Bigarray.float64_elt) typedArray
 
-val kind : ('a, 'b) typedArray t -> ('a, 'b) Bigarray.kind
+(** The first type parameter is the type of values that can be read and written
+    in the {!classtype:typedArray}. The last two type parameters define the
+    kind of bigarrays that can be converted to and from the
+    {!classtype:typedArray}. See {!type:Bigarray.kind}. *)
+type (_, _, _) kind =
+  | Int8_signed : (int, int, Bigarray.int8_signed_elt) kind
+  | Int8_unsigned : (int, int, Bigarray.int8_unsigned_elt) kind
+  | Int16_signed : (int, int, Bigarray.int16_signed_elt) kind
+  | Int16_unsigned : (int, int, Bigarray.int16_unsigned_elt) kind
+  | Int32_signed : (number_t, Int32.t, Bigarray.int32_elt) kind
+  | Int32_unsigned : (number_t, Int32.t, Bigarray.int32_elt) kind
+  | Float32 : (number_t, float, Bigarray.float32_elt) kind
+  | Float64 : (number_t, float, Bigarray.float64_elt) kind
+
+val kind : ('typed_array, 'bigarray, 'elt) typedArray t -> ('bigarray, 'elt) Bigarray.kind
 
 val from_genarray :
-  ('a, 'b, Bigarray.c_layout) Bigarray.Genarray.t -> ('a, 'b) typedArray t
+     ('typed_array, 'bigarray, 'elt) kind
+  -> ('bigarray, 'elt, Bigarray.c_layout) Bigarray.Genarray.t
+  -> ('typed_array, 'bigarray, 'elt) typedArray t
 
-val to_genarray : ('a, 'b) typedArray t -> ('a, 'b, Bigarray.c_layout) Bigarray.Genarray.t
+val to_genarray :
+     ('typed_array, 'bigarray, 'elt) typedArray t
+  -> ('bigarray, 'elt, Bigarray.c_layout) Bigarray.Genarray.t
 
 val int8Array : (int -> int8Array t) constr
 
@@ -142,7 +157,7 @@ val int32Array_inBuffer : (arrayBuffer t -> int -> int -> int32Array t) constr
 
 val uint32Array : (int -> uint32Array t) constr
 
-val uint32Array_fromArray : (uint32 js_array t -> uint32Array t) constr
+val uint32Array_fromArray : (number_t js_array t -> uint32Array t) constr
 
 val uint32Array_fromTypedArray : (uint32Array t -> uint32Array t) constr
 
@@ -170,72 +185,71 @@ val float64Array_fromBuffer : (arrayBuffer t -> float64Array t) constr
 
 val float64Array_inBuffer : (arrayBuffer t -> int -> int -> float64Array t) constr
 
-val set : ('a, 'b) typedArray t -> int -> 'a -> unit
+val set : ('a, _, _) typedArray t -> int -> 'a -> unit
 
-val get : ('a, 'b) typedArray t -> int -> 'a optdef
+val get : ('a, _, _) typedArray t -> int -> 'a optdef
 
-val unsafe_get : ('a, 'b) typedArray t -> int -> 'a
+val unsafe_get : ('a, _, _) typedArray t -> int -> 'a
 
-class type dataView =
-  object
-    inherit arrayBufferView
+class type dataView = object
+  inherit arrayBufferView
 
-    method getInt8 : int -> int meth
+  method getInt8 : int -> int meth
 
-    method getUint8 : int -> int meth
+  method getUint8 : int -> int meth
 
-    method getInt16 : int -> int meth
+  method getInt16 : int -> int meth
 
-    method getInt16_ : int -> bool t -> int meth
+  method getInt16_ : int -> bool t -> int meth
 
-    method getUint16 : int -> int meth
+  method getUint16 : int -> int meth
 
-    method getUint16_ : int -> bool t -> int meth
+  method getUint16_ : int -> bool t -> int meth
 
-    method getInt32 : int -> int meth
+  method getInt32 : int -> number_t meth
 
-    method getInt32_ : int -> bool t -> int meth
+  method getInt32_ : int -> bool t -> number_t meth
 
-    method getUint32 : int -> uint32 meth
+  method getUint32 : int -> number_t meth
 
-    method getUint32_ : int -> bool t -> uint32 meth
+  method getUint32_ : int -> bool t -> number_t meth
 
-    method getFloat32 : int -> float meth
+  method getFloat32 : int -> number_t meth
 
-    method getFloat32_ : int -> bool t -> float meth
+  method getFloat32_ : int -> bool t -> number_t meth
 
-    method getFloat64 : int -> float meth
+  method getFloat64 : int -> number_t meth
 
-    method getFloat64_ : int -> bool t -> float meth
+  method getFloat64_ : int -> bool t -> number_t meth
 
-    method setInt8 : int -> int -> unit meth
+  method setInt8 : int -> int -> unit meth
 
-    method setUint8 : int -> int -> unit meth
+  method setUint8 : int -> int -> unit meth
 
-    method setInt16 : int -> int -> unit meth
+  method setInt16 : int -> int -> unit meth
 
-    method setInt16_ : int -> int -> bool t -> unit meth
+  method setInt16_ : int -> int -> bool t -> unit meth
 
-    method setUint16 : int -> int -> unit meth
+  method setUint16 : int -> int -> unit meth
 
-    method setUint16_ : int -> int -> bool t -> unit meth
+  method setUint16_ : int -> int -> bool t -> unit meth
 
-    method setInt32 : int -> int -> unit meth
+  method setInt32 : int -> number_t -> unit meth
 
-    method setInt32_ : int -> int -> bool t -> unit meth
+  method setInt32_ : int -> number_t -> bool t -> unit meth
 
-    method setUint32 : int -> uint32 -> unit meth
+  method setUint32 : int -> number_t -> unit meth
 
-    method setUint32_ : int -> uint32 -> bool t -> unit meth
+  method setUint32_ : int -> number_t -> bool t -> unit meth
 
-    method setFloat32 : int -> float -> unit meth
+  method setFloat32 : int -> number_t -> unit meth
 
-    method setFloat32_ : int -> float -> bool t -> unit meth
+  method setFloat32_ : int -> number_t -> bool t -> unit meth
 
-    method setFloat64 : int -> float -> unit meth
+  method setFloat64 : int -> number_t -> unit meth
 
-    method setFloat64_ : int -> float -> bool t -> unit meth
-  end
+  method setFloat64_ : int -> number_t -> bool t -> unit meth
+end
 
 val dataView : (arrayBuffer t -> dataView t) constr
 
@@ -257,4 +271,21 @@ module String : sig
   val of_arrayBuffer : arrayBuffer Js.t -> string
 
   val of_uint8Array : uint8Array Js.t -> string
+end
+
+module Bytes : sig
+  val of_uint8Array : uint8Array Js.t -> bytes
+  (** This efficiently converts a typed array to [bytes] because it will usually
+      not copy its input.
+
+      Modifying its input may also modify its output, and vice versa when
+      modifying its output. This is not a guarantee, however, since certain
+      [bytes] operations may require the runtime to make a copy. One should not
+      use this on input that is sensitive to modification. *)
+
+  val to_uint8Array : bytes -> uint8Array Js.t
+  (** See the words of caution for {!of_uint8Array}. *)
+
+  val of_arrayBuffer : arrayBuffer Js.t -> bytes
+  (** See the words of caution for {!of_uint8Array}. *)
 end

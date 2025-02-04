@@ -42,7 +42,8 @@ let rec arg_deps vars deps defs params args =
       add_dep deps x y;
       add_def vars defs x y;
       arg_deps vars deps defs params args
-  | _ -> ()
+  | [], [] -> ()
+  | _ -> assert false
 
 let cont_deps blocks vars deps defs (pc, args) =
   let block = Addr.Map.find pc blocks in
@@ -50,10 +51,10 @@ let cont_deps blocks vars deps defs (pc, args) =
 
 let expr_deps blocks vars deps defs x e =
   match e with
-  | Constant _ | Apply _ | Prim _ -> ()
+  | Constant _ | Apply _ | Prim _ | Special _ -> ()
   | Closure (_, cont) -> cont_deps blocks vars deps defs cont
-  | Block (_, a, _) -> Array.iter a ~f:(fun y -> add_dep deps x y)
-  | Field (y, _) -> add_dep deps x y
+  | Block (_, a, _, _) -> Array.iter a ~f:(fun y -> add_dep deps x y)
+  | Field (y, _, _) -> add_dep deps x y
 
 let program_deps { blocks; _ } =
   let nv = Var.count () in
@@ -67,19 +68,22 @@ let program_deps { blocks; _ } =
           | Let (x, e) ->
               add_var vars x;
               expr_deps blocks vars deps defs x e
-          | Set_field _ | Array_set _ | Offset_ref _ -> ());
-      Option.iter block.handler ~f:(fun (_, cont) -> cont_deps blocks vars deps defs cont);
+          | Assign (x, y) ->
+              add_dep deps x y;
+              add_def vars defs x y
+          | Event _ | Set_field _ | Array_set _ | Offset_ref _ -> ());
       match block.branch with
       | Return _ | Raise _ | Stop -> ()
       | Branch cont -> cont_deps blocks vars deps defs cont
       | Cond (_, cont1, cont2) ->
           cont_deps blocks vars deps defs cont1;
           cont_deps blocks vars deps defs cont2
-      | Switch (_, a1, a2) ->
-          Array.iter a1 ~f:(fun cont -> cont_deps blocks vars deps defs cont);
-          Array.iter a2 ~f:(fun cont -> cont_deps blocks vars deps defs cont)
-      | Pushtrap (cont, _, _, _) -> cont_deps blocks vars deps defs cont
-      | Poptrap (cont, _) -> cont_deps blocks vars deps defs cont)
+      | Switch (_, a1) ->
+          Array.iter a1 ~f:(fun cont -> cont_deps blocks vars deps defs cont)
+      | Pushtrap (cont, _, cont_h) ->
+          cont_deps blocks vars deps defs cont_h;
+          cont_deps blocks vars deps defs cont
+      | Poptrap cont -> cont_deps blocks vars deps defs cont)
     blocks;
   vars, deps, defs
 
@@ -141,10 +145,8 @@ let solver1 vars deps defs =
   ignore (Solver1.f () g (propagate1 deps defs reprs));
   Array.mapi reprs ~f:(fun idx y ->
       match y with
-      | Some y ->
-          let y = repr reprs y in
-          if Var.idx y = idx then None else Some y
-      | None -> None)
+      | Some y -> repr reprs y
+      | None -> Var.of_idx idx)
 
 let f p =
   let t = Timer.make () in
@@ -154,6 +156,8 @@ let f p =
   let t' = Timer.make () in
   let subst = solver1 vars deps defs in
   if times () then Format.eprintf "    phi-simpl. 2: %a@." Timer.print t';
+  Array.iteri subst ~f:(fun idx y ->
+      if Var.idx y = idx then () else Code.Var.propagate_name (Var.of_idx idx) y);
   let p = Subst.program (Subst.from_array subst) p in
   if times () then Format.eprintf "  phi-simpl.: %a@." Timer.print t;
   p

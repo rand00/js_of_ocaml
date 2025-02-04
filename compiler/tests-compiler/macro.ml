@@ -30,11 +30,12 @@ let print_macro_transformed source =
         |> Util.Filetype.write_js ~name:"test.js"
       in
       let parsed = Util.parse_js source in
-      let transformed = Jsoo.Macro.f parsed in
-      Jsoo.Js_output.program pp transformed;
+      let transformed, _ = Jsoo.Macro.f ~flags:false parsed in
+      let (_ : Jsoo.Source_map.info) = Jsoo.Js_output.program pp transformed in
       print_endline (Buffer.contents buffer))
 
 let print_macro_transformed source =
+  Jsoo.Targetint.set_num_bits 32;
   try print_macro_transformed source with Failure s -> Format.printf "failure: %s%!" s
 
 let%expect_test "BLOCK()" =
@@ -67,19 +68,19 @@ let%expect_test "BLOCK(tag)" =
 
 let%expect_test "BLOCK(1, a)" =
   print_macro_transformed "BLOCK(1, a)";
-  [%expect {| [1,a]; |}]
+  [%expect {| [1, a]; |}]
 
 let%expect_test "BLOCK(1, a, b, c)" =
   print_macro_transformed "BLOCK(1, a, b, c)";
-  [%expect {| [1,a,b,c]; |}]
+  [%expect {| [1, a, b, c]; |}]
 
 let%expect_test "BLOCK(077, a)" =
   print_macro_transformed "BLOCK(077, a)";
-  [%expect {| [63,a]; |}]
+  [%expect {| [63, a]; |}]
 
 let%expect_test "BLOCK(0779, a)" =
   print_macro_transformed "BLOCK(0779, a)";
-  [%expect {| [779,a]; |}]
+  [%expect {| [779, a]; |}]
 
 let%expect_test "TAG(a)" =
   print_macro_transformed "TAG(a)";
